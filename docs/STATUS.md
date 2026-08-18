@@ -16,8 +16,8 @@ Every commit must include the corresponding update to this file: task status, de
 
 ## Operational reality
 
-- Base revision: `eb161d5` (`Support Codex compressed rollouts`)
-- Branch: `main`, tracking GitHub `github/main`; M1 and M2 have been pushed
+- Base revision: `eddbcbf` (`Add the GPUI navigation shell`)
+- Branch: `main`, tracking GitHub `github/main`; M1, M2, and the M3-01 implementation have been pushed
 - Additional remote: Amp-hosted `origin` remains read-only for this work
 - Amp project and `origin` still use `moeit/token-usage` pending a Puck-managed rename
 - Toolchain: Rust 1.96.0; repository checks are defined in `AGENTS.md`
@@ -45,8 +45,8 @@ Every commit must include the corresponding update to this file: task status, de
 | M2-06 Cost facts | coordinator | `12f5539` | canonical event-cost ingestion contract | pushed | provider-cost atomicity; Pi pipeline; workspace checks | committed and pushed as `8080c26` |
 | M2-07 Reconciliation report | coordinator | `8080c26` | complete collector facts | pushed | deterministic reconciliation/cross-check fixtures; workspace checks | committed and pushed as `e5d77ee` |
 | M2-08 Variant assessment | coordinator | `e5d77ee` | upstream Codex/Pi contracts | pushed | official-source evidence; variant fixtures where supported; workspace checks | committed and pushed as `eb161d5` |
-| M3-01 GPUI window shell | coordinator | `eb161d5` | tested GPUI revision | implemented; macOS validation pending | macOS compile; locale/theme shell tests; representative UI verification | pinned GPUI and portable shell are verified on Linux; launch and visual acceptance require a macOS runner |
-| M3-02 Overview snapshot | coordinator | M3-01 commit | portable shell and aggregate queries | queued | snapshot-generation tests; async stale-result tests; workspace checks | validate M3-01 on macOS, then connect immutable overview data off the render path |
+| M3-01 GPUI window shell | coordinator | `eb161d5` | tested GPUI revision | pushed; macOS validation blocked | macOS compile; locale/theme shell tests; representative UI verification | committed and pushed as `eddbcbf`; native build is blocked by the runner's missing Metal Toolchain |
+| M3-02 Overview snapshot | coordinator | `eddbcbf` | portable shell and aggregate queries | active | snapshot-generation tests; async stale-result tests; workspace checks | connect immutable overview data off the render path while native shell acceptance remains pending |
 
 ## Verification contract
 
@@ -185,7 +185,9 @@ Every commit must include the corresponding update to this file: task status, de
 - `cargo fmt --all --check`, `cargo check --workspace --all-targets`, and `cargo clippy --workspace --all-targets -- -D warnings` passed on the Linux orb after resolving the exact dependency graph.
 - `cargo test --workspace` passed (77 tests: 68 unit tests and 9 storage/pipeline integration tests).
 - A Linux-to-`aarch64-apple-darwin` check advanced through GPUI dependencies with Clang but stopped in upstream `media` binding generation because the orb has no macOS SDK; this is an environment limitation, not a successful macOS compile.
-- A macOS runner was unavailable. Native compilation, launch, interaction, accessibility inspection, and the required representative light/dark English/Chinese visual matrix remain pending and must not be inferred from Linux checks.
+- Native validation used a clean detached checkout of `eddbcbf` on an Apple Silicon runner with macOS 26.5.2, Xcode/CLT 26.6, and repository-pinned Rust 1.96.0. Formatting passed and the 69 non-desktop tests passed in an isolated synthetic-data environment.
+- The macOS workspace check, tests, Clippy, desktop build, launch, and visual checks all stop before AgentMeter compilation because `gpui_macos` cannot invoke the missing Metal Toolchain. Xcode's component downloader also fails because its installed frameworks do not match the current macOS release; repairing that installation requires a system/toolchain update and was not authorized.
+- Native compilation, launch, interaction, accessibility inspection, and the required representative light/dark English/Chinese visual matrix remain pending and must not be inferred from source inspection or portable tests.
 
 ## Budget ledger
 

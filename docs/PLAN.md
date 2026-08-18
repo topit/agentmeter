@@ -498,4 +498,4 @@ These decisions do not block M1 but should be settled before macOS beta:
 
 ## 19. Immediate next implementation step
 
-Validate the pinned GPUI navigation shell on macOS, including launch, navigation, keyboard focus, English/Chinese text, and system/light/dark rendering. Then connect the first immutable overview query snapshot with generation-based stale-result rejection, keeping SQLite work off the render path.
+Connect the first immutable overview query snapshot with generation-based stale-result rejection, keeping SQLite work off the render path. Native shell acceptance remains required before M3 exits; rerun macOS launch, navigation, keyboard focus, English/Chinese, and system/light/dark verification after the runner has a working Metal Toolchain.
