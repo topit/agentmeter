@@ -772,6 +772,7 @@ fn finish_usage(
                 DataConfidence::Exact
             },
         },
+        costs: Vec::new(),
         provenance: EventProvenance {
             native_id: ordinal.map(|value| format!("ordinal:{value}")),
             record_offset: Some(record_offset),

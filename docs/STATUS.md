@@ -16,8 +16,8 @@ Every commit must include the corresponding update to this file: task status, de
 
 ## Operational reality
 
-- Base revision: `27372d3` (`Require roadmap updates before commits`)
-- Branch: `main`, tracking GitHub `github/main`; M1 through M2-04 have been pushed
+- Base revision: `12f5539` (`Add portable source health snapshots`)
+- Branch: `main`, tracking GitHub `github/main`; M1 through M2-05 have been pushed
 - Additional remote: Amp-hosted `origin` remains read-only for this work
 - Amp project and `origin` still use `moeit/token-usage` pending a Puck-managed rename
 - Toolchain: Rust 1.96.0; repository checks are defined in `AGENTS.md`
@@ -41,8 +41,9 @@ Every commit must include the corresponding update to this file: task status, de
 | M2-03a Codex JSONL core | coordinator | `fcc9481` | official protocol research | pushed | cumulative/incremental/archive fixtures; storage pipeline; workspace checks | committed and pushed as `cabf805` |
 | M2-03b Codex lineage | coordinator | `cabf805` | official history lineage | pushed | paginated/legacy fork, replay, revert and archive fixtures | committed and pushed as `5b54c3e` |
 | M2-04 Pi | coordinator | `5b54c3e` | upstream format research | pushed | fixture and cross-check suite | committed and pushed as `75ec3c7` |
-| M2-05 Source health | coordinator | `27372d3` | collector diagnostics and checkpoints | integrated | portable health-state tests; storage integration; workspace checks | all health states, generations, remediation and i18n mappings verified; ready to commit and push |
-| M2-06 Cost facts | coordinator | M2-05 | canonical event-cost ingestion contract | queued | provider-cost atomicity; Pi pipeline; workspace checks | persist provider-reported cost separately from estimates and credits |
+| M2-05 Source health | coordinator | `27372d3` | collector diagnostics and checkpoints | pushed | portable health-state tests; storage integration; workspace checks | committed and pushed as `12f5539` |
+| M2-06 Cost facts | coordinator | `12f5539` | canonical event-cost ingestion contract | completed | provider-cost atomicity; Pi pipeline; workspace checks | exact nano-USD facts persist atomically and Pi parser v2 emits provider-reported costs; ready to commit and push |
+| M2-07 Reconciliation report | coordinator | M2-06 commit | complete collector facts | queued | deterministic reconciliation/cross-check fixtures; workspace checks | add content-free periodic reconciliation and exportable cross-check reporting |
 
 ## Verification contract
 
@@ -140,6 +141,16 @@ Every commit must include the corresponding update to this file: task status, de
 - Integration coverage exercises missing setup, never-scanned sources, healthy and partial runs, warning- and failure-based unsupported schemas, generic errors, denied/recovered permission, disabled-state preservation across rediscovery, and stable/changing generations.
 - Desktop localization maps every health state and remediation to complete English and Simplified Chinese messages; presentation code does not parse diagnostic prose.
 - `git diff --check` passed. Privacy scanning found only policy examples and intentional `/fixture/home/...` synthetic paths; no real paths, source logs, content-bearing payloads, or secrets were added.
+
+## M2-06 verification evidence
+
+- Exact non-negative JSON decimals are parsed without `f64` into integer nano-USD; tests cover fractional, exponent, trailing-zero, negative, over-precise, and overflowing values.
+- The core ingestion contract distinguishes provider-reported, API-equivalent estimate, subscription credit, and unpriced facts. USD amounts are prohibited for subscription credits and unpriced facts at persistence time.
+- Usage, provenance, costs, and checkpoints share one SQLite transaction. Storage tests cover replay idempotence, changed-cost identity conflicts, invalid-cost rollback, and stale-cost deletion during source replacement.
+- Pi parser version 2 retains authoritative source totals or exactly summed component costs for assistant, compaction, and branch-summary usage. Malformed costs warn without dropping valid token facts, and copied fork costs follow the same native-lineage deduplication as usage.
+- `cargo fmt --all --check`, `cargo check --workspace --all-targets`, and `cargo clippy --workspace --all-targets -- -D warnings`: passed.
+- `cargo test --workspace`: passed (69 tests: 60 unit tests and 9 storage/pipeline integration tests), including the Pi adapter fixture and collector-to-storage cost path.
+- `git diff --check` passed; the final privacy-pattern scan found only policy examples and intentional synthetic fixture paths.
 
 ## Budget ledger
 

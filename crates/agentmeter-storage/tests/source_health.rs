@@ -205,6 +205,7 @@ fn record() -> UsageRecord {
             source_reported_total: Some(15),
             confidence: DataConfidence::Exact,
         },
+        costs: Vec::new(),
         provenance: EventProvenance {
             native_id: Some("native-health-synthetic".into()),
             record_offset: Some(0),

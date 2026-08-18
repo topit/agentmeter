@@ -1,16 +1,11 @@
 //! Reversible AgentMeter pricing of immutable token facts.
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CostKind {
-    ProviderReported,
-    ApiEquivalentEstimate,
-    SubscriptionCredit,
-    Unpriced,
-}
+pub use agentmeter_core::CostKind;
+use agentmeter_core::NanoUsd;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CostEstimate {
-    pub usd: Option<f64>,
+    pub usd: Option<NanoUsd>,
     pub kind: CostKind,
     pub pricing_key: Option<String>,
     pub pricing_source: Option<String>,

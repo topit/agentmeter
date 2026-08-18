@@ -10,7 +10,8 @@ use std::{
 };
 
 use agentmeter_core::{
-    DataConfidence, EventProvenance, TimestampOrigin, TokenBreakdown, UsageEvent, UsageRecord,
+    CostFact, CostKind, DataConfidence, EventProvenance, NanoUsd, TimestampOrigin, TokenBreakdown,
+    UsageEvent, UsageRecord,
 };
 use serde::{Deserialize, Serialize};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
@@ -21,7 +22,7 @@ use crate::{
     file_support::{checkpoint_continues, ensure_kind, hash_file, hash_prefix, io_error},
 };
 
-const PARSER_VERSION: u32 = 1;
+const PARSER_VERSION: u32 = 2;
 #[derive(Clone, Debug)]
 pub struct PiJsonlAdapter {
     sessions_root: PathBuf,
@@ -301,7 +302,6 @@ struct ParserState {
     header_seen: bool,
     schema_supported: bool,
     lineage_unresolved: bool,
-    cost_pending_warned: bool,
     schema_version: u64,
 }
 
@@ -385,13 +385,6 @@ fn process_entry(
             "Pi inherited entry at byte {record_offset} changed usage facts; retained as derived"
         ));
     }
-    if usage.cost.is_some() && !state.cost_pending_warned {
-        state.cost_pending_warned = true;
-        warnings.push(
-            "Pi provider-reported cost is present but cost-fact ingestion is not implemented; token usage was retained"
-                .to_owned(),
-        );
-    }
     normalize_usage(
         usage,
         provider,
@@ -424,6 +417,10 @@ fn normalize_usage(
     warnings: &mut Vec<String>,
 ) -> Option<UsageRecord> {
     let mut derived = state.lineage_unresolved || native_id.is_none();
+    let provider_cost = usage
+        .cost
+        .as_ref()
+        .and_then(|cost| normalize_provider_cost(cost, record_offset, warnings));
     let input = nonnegative(usage.input, "input", record_offset, &mut derived, warnings);
     let output_total = nonnegative(
         usage.output,
@@ -531,6 +528,7 @@ fn normalize_usage(
                 DataConfidence::Exact
             },
         },
+        costs: provider_cost.into_iter().collect(),
         provenance: EventProvenance {
             native_id: native_id.map(str::to_owned),
             record_offset: Some(record_offset),
@@ -546,6 +544,76 @@ fn normalize_usage(
                 usage.total_tokens
             )],
         },
+    })
+}
+
+fn normalize_provider_cost(
+    raw: &RawCost,
+    record_offset: u64,
+    warnings: &mut Vec<String>,
+) -> Option<CostFact> {
+    let mut components = Vec::new();
+    let mut components_valid = true;
+    for (name, value) in [
+        ("input", raw.input.as_ref()),
+        ("output", raw.output.as_ref()),
+        ("cache read", raw.cache_read.as_ref()),
+        ("cache write", raw.cache_write.as_ref()),
+    ] {
+        if let Some(value) = value {
+            match NanoUsd::parse_decimal(&value.to_string()) {
+                Ok(value) => components.push(value),
+                Err(error) => {
+                    components_valid = false;
+                    warnings.push(format!(
+                        "Pi provider-reported {name} cost at byte {record_offset} is invalid ({error:?}); cost bucket was not used"
+                    ));
+                }
+            }
+        }
+    }
+    let component_total = components
+        .iter()
+        .copied()
+        .try_fold(NanoUsd::from_nanos(0), NanoUsd::checked_add);
+    if components_valid && component_total.is_none() {
+        warnings.push(format!(
+            "Pi provider-reported cost components overflow at byte {record_offset}; cost was not retained"
+        ));
+    }
+
+    let usd = if let Some(total) = raw.total.as_ref() {
+        let total = match NanoUsd::parse_decimal(&total.to_string()) {
+            Ok(total) => total,
+            Err(error) => {
+                warnings.push(format!(
+                    "Pi provider-reported total cost at byte {record_offset} is invalid ({error:?}); cost was not retained"
+                ));
+                return None;
+            }
+        };
+        if components_valid
+            && !components.is_empty()
+            && component_total.is_some_and(|component_total| component_total != total)
+        {
+            warnings.push(format!(
+                "Pi provider-reported total cost disagrees with cost components at byte {record_offset}; retained the source total"
+            ));
+        }
+        total
+    } else if components_valid && !components.is_empty() {
+        component_total?
+    } else {
+        warnings.push(format!(
+            "Pi provider-reported cost at byte {record_offset} has no valid total; cost was not retained"
+        ));
+        return None;
+    };
+
+    Some(CostFact {
+        kind: CostKind::ProviderReported,
+        usd: Some(usd),
+        confidence: DataConfidence::Exact,
     })
 }
 
@@ -669,7 +737,7 @@ mod tests {
 
     use tempfile::TempDir;
 
-    use super::PiJsonlAdapter;
+    use super::{PiJsonlAdapter, RawCost, normalize_provider_cost};
     use crate::{CollectorAdapter, IngestMode, IngestStart};
 
     #[test]
@@ -714,9 +782,9 @@ mod tests {
         let adapter = PiJsonlAdapter::new(root.path());
         let source = adapter.discover().unwrap().pop().unwrap();
         let batch = adapter.ingest(&source, IngestStart::Fresh).unwrap();
-        assert_eq!(batch.warnings.len(), 1);
-        assert!(batch.warnings[0].contains("cost-fact ingestion"));
+        assert!(batch.warnings.is_empty());
         assert_eq!(batch.records.len(), 2);
+        assert_eq!(batch.records[0].costs[0].usd.unwrap().as_nanos(), 0);
         let assistant = &batch.records[0].event;
         assert_eq!(
             assistant.session_id.as_deref(),
@@ -771,14 +839,57 @@ mod tests {
             .find(|candidate| candidate.path == child)
             .unwrap();
         let batch = adapter.ingest(&source, IngestStart::Fresh).unwrap();
-        assert_eq!(batch.warnings.len(), 1);
-        assert!(batch.warnings[0].contains("cost-fact ingestion"));
+        assert!(batch.warnings.is_empty());
         assert_eq!(batch.records.len(), 1);
         assert_eq!(
             batch.records[0].provenance.native_id.as_deref(),
             Some("entry-child")
         );
         assert_eq!(batch.records[0].event.tokens.checked_total(), Some(35));
+        assert_eq!(batch.records[0].costs[0].usd.unwrap().as_nanos(), 0);
+    }
+
+    #[test]
+    fn provider_cost_prefers_total_and_can_sum_components_exactly() {
+        let with_total: RawCost = serde_json::from_value(serde_json::json!({
+            "input": 0.001, "output": 0.002, "cacheRead": 0.003,
+            "cacheWrite": 0.004, "total": 0.01
+        }))
+        .unwrap();
+        let mut warnings = Vec::new();
+        let fact = normalize_provider_cost(&with_total, 10, &mut warnings).unwrap();
+        assert_eq!(fact.kind, agentmeter_core::CostKind::ProviderReported);
+        assert_eq!(fact.usd.unwrap().as_nanos(), 10_000_000);
+        assert!(warnings.is_empty());
+
+        let components_only: RawCost = serde_json::from_value(serde_json::json!({
+            "input": 0.000000001, "output": 0.000000002
+        }))
+        .unwrap();
+        let fact = normalize_provider_cost(&components_only, 20, &mut warnings).unwrap();
+        assert_eq!(fact.usd.unwrap().as_nanos(), 3);
+    }
+
+    #[test]
+    fn invalid_provider_cost_is_diagnosed_without_fabricating_a_fact() {
+        let invalid: RawCost = serde_json::from_value(serde_json::json!({
+            "total": -0.01
+        }))
+        .unwrap();
+        let mut warnings = Vec::new();
+        assert!(normalize_provider_cost(&invalid, 10, &mut warnings).is_none());
+        assert!(warnings.iter().any(|warning| warning.contains("Negative")));
+
+        let too_precise: RawCost = serde_json::from_value(serde_json::json!({
+            "total": 0.0000000001
+        }))
+        .unwrap();
+        assert!(normalize_provider_cost(&too_precise, 20, &mut warnings).is_none());
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| warning.contains("TooPrecise"))
+        );
     }
 
     #[test]

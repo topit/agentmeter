@@ -242,6 +242,7 @@ impl StreamEvent {
                 source_reported_total: None,
                 confidence: DataConfidence::Exact,
             },
+            costs: Vec::new(),
             provenance: EventProvenance {
                 native_id: None,
                 record_offset: Some(record_offset),

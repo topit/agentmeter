@@ -35,6 +35,119 @@ pub enum DataConfidence {
     Estimated,
 }
 
+/// Why a cost fact exists. Provider-reported amounts and locally calculated
+/// API equivalents must never be presented as the same kind of spend.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CostKind {
+    ProviderReported,
+    ApiEquivalentEstimate,
+    SubscriptionCredit,
+    Unpriced,
+}
+
+/// An exact USD amount expressed as USD × 10^9. Keeping decimal source facts
+/// as integers prevents binary floating point from affecting event identity.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NanoUsd(u64);
+
+impl NanoUsd {
+    pub const fn from_nanos(nanos: u64) -> Self {
+        Self(nanos)
+    }
+
+    pub const fn as_nanos(self) -> u64 {
+        self.0
+    }
+
+    /// Parses a non-negative JSON decimal without passing through a float.
+    /// Values must be exactly representable to nine decimal places.
+    pub fn parse_decimal(value: &str) -> Result<Self, NanoUsdParseError> {
+        let (negative, unsigned) = value
+            .strip_prefix('-')
+            .map_or((false, value), |unsigned| (true, unsigned));
+        if negative {
+            return Err(NanoUsdParseError::Negative);
+        }
+        let (mantissa, exponent) = match unsigned.split_once(['e', 'E']) {
+            Some((mantissa, exponent)) => (
+                mantissa,
+                exponent
+                    .parse::<i32>()
+                    .map_err(|_| NanoUsdParseError::Invalid)?,
+            ),
+            None => (unsigned, 0),
+        };
+        if mantissa.is_empty() {
+            return Err(NanoUsdParseError::Invalid);
+        }
+        let (whole, fraction) = match mantissa.split_once('.') {
+            Some((_, "")) => return Err(NanoUsdParseError::Invalid),
+            Some(parts) => parts,
+            None => (mantissa, ""),
+        };
+        if whole.is_empty()
+            || !whole.bytes().all(|byte| byte.is_ascii_digit())
+            || !fraction.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            return Err(NanoUsdParseError::Invalid);
+        }
+        let digits = format!("{whole}{fraction}");
+        let significant = digits.trim_start_matches('0');
+        if significant.is_empty() {
+            return Ok(Self(0));
+        }
+        let power = 9_i64 - i64::try_from(fraction.len()).unwrap_or(i64::MAX) + i64::from(exponent);
+        let (significant, power) = if power < 0 {
+            let places = usize::try_from(-power).map_err(|_| NanoUsdParseError::TooPrecise)?;
+            let split = significant
+                .len()
+                .checked_sub(places)
+                .ok_or(NanoUsdParseError::TooPrecise)?;
+            if !significant[split..].bytes().all(|byte| byte == b'0') {
+                return Err(NanoUsdParseError::TooPrecise);
+            }
+            (&significant[..split], 0)
+        } else {
+            (significant, power)
+        };
+        let value = significant
+            .parse::<u64>()
+            .map_err(|_| NanoUsdParseError::OutOfRange)?;
+        let nanos = if power == 0 {
+            value
+        } else {
+            let power = u32::try_from(power).map_err(|_| NanoUsdParseError::OutOfRange)?;
+            let multiplier = 10_u64
+                .checked_pow(power)
+                .ok_or(NanoUsdParseError::OutOfRange)?;
+            value
+                .checked_mul(multiplier)
+                .ok_or(NanoUsdParseError::OutOfRange)?
+        };
+        Ok(Self(nanos))
+    }
+
+    pub fn checked_add(self, other: Self) -> Option<Self> {
+        self.0.checked_add(other.0).map(Self)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NanoUsdParseError {
+    Invalid,
+    Negative,
+    TooPrecise,
+    OutOfRange,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CostFact {
+    pub kind: CostKind,
+    /// `None` is reserved for facts such as `Unpriced` and non-USD credits.
+    pub usd: Option<NanoUsd>,
+    pub confidence: DataConfidence,
+}
+
 /// Where the event timestamp came from.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TimestampOrigin {
@@ -75,6 +188,7 @@ pub struct EventProvenance {
 pub struct UsageRecord {
     pub event: UsageEvent,
     pub provenance: EventProvenance,
+    pub costs: Vec<CostFact>,
 }
 
 /// Collection state for one configured installation or discovered source.
@@ -138,7 +252,7 @@ pub struct SourceHealthSnapshot {
 
 #[cfg(test)]
 mod tests {
-    use super::TokenBreakdown;
+    use super::{NanoUsd, NanoUsdParseError, TokenBreakdown};
 
     #[test]
     fn normalized_total_sums_exclusive_buckets() {
@@ -162,5 +276,44 @@ mod tests {
         };
 
         assert_eq!(usage.checked_total(), None);
+    }
+
+    #[test]
+    fn nano_usd_parses_json_decimals_exactly() {
+        assert_eq!(NanoUsd::parse_decimal("0.000000001").unwrap().as_nanos(), 1);
+        assert_eq!(
+            NanoUsd::parse_decimal("1.25").unwrap().as_nanos(),
+            1_250_000_000
+        );
+        assert_eq!(
+            NanoUsd::parse_decimal("12e-3").unwrap().as_nanos(),
+            12_000_000
+        );
+        assert_eq!(
+            NanoUsd::parse_decimal("1.0000000000").unwrap().as_nanos(),
+            1_000_000_000
+        );
+        assert_eq!(
+            NanoUsd::parse_decimal("100000000000000000000e-20")
+                .unwrap()
+                .as_nanos(),
+            1_000_000_000
+        );
+    }
+
+    #[test]
+    fn nano_usd_rejects_lossy_or_invalid_amounts() {
+        assert_eq!(
+            NanoUsd::parse_decimal("-0.1"),
+            Err(NanoUsdParseError::Negative)
+        );
+        assert_eq!(
+            NanoUsd::parse_decimal("0.0000000001"),
+            Err(NanoUsdParseError::TooPrecise)
+        );
+        assert_eq!(
+            NanoUsd::parse_decimal("18446744074"),
+            Err(NanoUsdParseError::OutOfRange)
+        );
     }
 }

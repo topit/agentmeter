@@ -216,6 +216,8 @@ Cost kinds:
 - `SubscriptionCredit`: source-specific credit/quota that is not USD spend.
 - `Unpriced`: model or tier cannot be matched safely.
 
+Canonical USD amounts use integer nano-USD (USD × 10⁹) so decimal source facts, event identity, and fixture assertions never depend on binary floating point. SQLite's existing USD representation is converted only at the storage boundary. Subscription credits without explicit USD semantics carry no USD amount.
+
 Pricing precedence:
 
 1. retain provider-reported cost;
@@ -492,4 +494,4 @@ These decisions do not block M1 but should be settled before macOS beta:
 
 ## 19. Immediate next implementation step
 
-Carry provider-reported cost facts through the core ingestion contract into `event_costs`, beginning with Pi and preserving source currency semantics without treating subscription credits as USD. Periodic reconciliation and cross-check reporting remain M2 gates; Codex compressed/headless variants and Pi's retained legacy location must be assessed before either adapter is called supported.
+Add deterministic periodic reconciliation and an exportable cross-check report for the implemented Amp, Codex, and Pi adapters. The report must compare canonical totals with source/reference totals without exporting content. Codex compressed/headless variants and Pi's retained legacy location must still be assessed before either adapter is called supported.

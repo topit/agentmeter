@@ -3,8 +3,9 @@
 use std::path::Path;
 
 use agentmeter_core::{
-    DataConfidence, SourceHealth, SourceHealthSnapshot, SourceHealthState, SourcePermissionState,
-    SourceRemediation, TimestampOrigin, TokenBreakdown, UsageEvent, UsageRecord,
+    CostFact, CostKind, DataConfidence, NanoUsd, SourceHealth, SourceHealthSnapshot,
+    SourceHealthState, SourcePermissionState, SourceRemediation, TimestampOrigin, TokenBreakdown,
+    UsageEvent, UsageRecord,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde::Serialize;
@@ -159,6 +160,11 @@ pub enum StorageError {
     SourceNotRegistered(String),
     #[error("event identity {event_id} was reused with different usage facts")]
     EventIdentityConflict { event_id: String },
+    #[error("event {event_id} has an invalid {kind} cost fact")]
+    InvalidCostFact {
+        event_id: String,
+        kind: &'static str,
+    },
     #[error("{field} value does not fit SQLite INTEGER")]
     IntegerOutOfRange { field: &'static str },
     #[error("failed to serialize diagnostics: {0}")]
@@ -524,6 +530,28 @@ impl Database {
         let rows = statement.query_map(params![source_object_id], |row| row.get(0))?;
         rows.collect::<std::result::Result<Vec<_>, _>>()
             .map_err(Into::into)
+    }
+
+    pub fn event_costs(&self, source_object_id: &str, event_id: &str) -> Result<Vec<CostFact>> {
+        let mut statement = self.connection.prepare(
+            "SELECT kind, usd, confidence FROM event_costs
+             WHERE source_object_id = ?1 AND event_id = ?2 ORDER BY kind",
+        )?;
+        let rows = statement.query_map(params![source_object_id, event_id], |row| {
+            let kind: String = row.get(0)?;
+            let usd: Option<f64> = row.get(1)?;
+            let confidence: String = row.get(2)?;
+            Ok((kind, usd, confidence))
+        })?;
+        rows.map(|row| {
+            let (kind, usd, confidence) = row?;
+            Ok(CostFact {
+                kind: parse_cost_kind(&kind),
+                usd: usd.map(|usd| NanoUsd::from_nanos((usd * 1_000_000_000.0).round() as u64)),
+                confidence: parse_confidence(&confidence),
+            })
+        })
+        .collect()
     }
 
     pub fn daily_usage_utc(&self) -> Result<Vec<DailyUsage>> {
@@ -1065,6 +1093,7 @@ fn insert_record(
                 serde_json::to_string(&provenance.normalization_notes)?,
             ],
         )?;
+        insert_costs(transaction, source_object_id, record)?;
     } else if !stored_record_matches(transaction, source_object_id, record)? {
         return Err(StorageError::EventIdentityConflict {
             event_id: event.id.clone(),
@@ -1082,7 +1111,7 @@ fn stored_record_matches(
 ) -> Result<bool> {
     let event = &record.event;
     let provenance = &record.provenance;
-    Ok(transaction.query_row(
+    let usage_matches = transaction.query_row(
         "SELECT EXISTS(
             SELECT 1
             FROM usage_events AS e
@@ -1132,7 +1161,88 @@ fn stored_record_matches(
             serde_json::to_string(&provenance.normalization_notes)?,
         ],
         |row| row.get(0),
-    )?)
+    )?;
+    Ok(usage_matches && stored_costs_match(transaction, source_object_id, record)?)
+}
+
+fn insert_costs(
+    transaction: &Transaction<'_>,
+    source_object_id: &str,
+    record: &UsageRecord,
+) -> Result<()> {
+    for cost in &record.costs {
+        validate_cost(&record.event.id, cost)?;
+        transaction.execute(
+            "INSERT INTO event_costs (
+                source_object_id, event_id, kind, usd, confidence
+             ) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                source_object_id,
+                record.event.id,
+                cost_kind_str(cost.kind),
+                cost.usd.map(nano_usd_to_sql).transpose()?,
+                confidence_str(cost.confidence),
+            ],
+        )?;
+    }
+    Ok(())
+}
+
+fn stored_costs_match(
+    transaction: &Transaction<'_>,
+    source_object_id: &str,
+    record: &UsageRecord,
+) -> Result<bool> {
+    let stored_count: i64 = transaction.query_row(
+        "SELECT COUNT(*) FROM event_costs WHERE source_object_id = ?1 AND event_id = ?2",
+        params![source_object_id, record.event.id],
+        |row| row.get(0),
+    )?;
+    if stored_count != record.costs.len() as i64 {
+        return Ok(false);
+    }
+    for cost in &record.costs {
+        validate_cost(&record.event.id, cost)?;
+        let matches: bool = transaction.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM event_costs
+                WHERE source_object_id = ?1 AND event_id = ?2 AND kind = ?3
+                  AND usd IS ?4 AND confidence = ?5
+             )",
+            params![
+                source_object_id,
+                record.event.id,
+                cost_kind_str(cost.kind),
+                cost.usd.map(nano_usd_to_sql).transpose()?,
+                confidence_str(cost.confidence),
+            ],
+            |row| row.get(0),
+        )?;
+        if !matches {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn validate_cost(event_id: &str, cost: &CostFact) -> Result<()> {
+    let valid = match cost.kind {
+        CostKind::ProviderReported | CostKind::ApiEquivalentEstimate => cost.usd.is_some(),
+        CostKind::SubscriptionCredit | CostKind::Unpriced => cost.usd.is_none(),
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(StorageError::InvalidCostFact {
+            event_id: event_id.to_owned(),
+            kind: cost_kind_str(cost.kind),
+        })
+    }
+}
+
+fn nano_usd_to_sql(value: NanoUsd) -> Result<f64> {
+    let nanos = to_sql_integer(value.as_nanos(), "cost_usd_nanos")?;
+    Ok(nanos as f64 / 1_000_000_000.0)
 }
 
 fn rebuild_daily_usage_in(transaction: &Transaction<'_>) -> Result<()> {
@@ -1166,6 +1276,32 @@ fn confidence_str(confidence: DataConfidence) -> &'static str {
     }
 }
 
+fn parse_confidence(confidence: &str) -> DataConfidence {
+    match confidence {
+        "exact" => DataConfidence::Exact,
+        "derived" => DataConfidence::Derived,
+        _ => DataConfidence::Estimated,
+    }
+}
+
+fn cost_kind_str(kind: CostKind) -> &'static str {
+    match kind {
+        CostKind::ProviderReported => "provider_reported",
+        CostKind::ApiEquivalentEstimate => "api_equivalent_estimate",
+        CostKind::SubscriptionCredit => "subscription_credit",
+        CostKind::Unpriced => "unpriced",
+    }
+}
+
+fn parse_cost_kind(kind: &str) -> CostKind {
+    match kind {
+        "provider_reported" => CostKind::ProviderReported,
+        "api_equivalent_estimate" => CostKind::ApiEquivalentEstimate,
+        "subscription_credit" => CostKind::SubscriptionCredit,
+        _ => CostKind::Unpriced,
+    }
+}
+
 fn timestamp_origin_str(origin: TimestampOrigin) -> &'static str {
     match origin {
         TimestampOrigin::Source => "source",
@@ -1181,7 +1317,8 @@ fn nonempty(value: String) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use agentmeter_core::{
-        DataConfidence, EventProvenance, TimestampOrigin, TokenBreakdown, UsageEvent, UsageRecord,
+        CostFact, CostKind, DataConfidence, EventProvenance, NanoUsd, TimestampOrigin,
+        TokenBreakdown, UsageEvent, UsageRecord,
     };
     use tempfile::tempdir;
 
@@ -1266,6 +1403,32 @@ mod tests {
     }
 
     #[test]
+    fn provider_cost_is_atomic_idempotent_and_part_of_event_identity() {
+        let mut database = registered_database();
+        let mut original = record("event-cost", 1_704_067_200_000, 10);
+        original.costs.push(provider_cost(1_234_567));
+        let request = ingest_request(WriteMode::Append, vec![original.clone()]);
+
+        database.apply_ingest(request.clone()).unwrap();
+        let duplicate = database.apply_ingest(request).unwrap();
+        assert_eq!(duplicate.duplicate_records, 1);
+        assert_eq!(
+            database.event_costs(SOURCE_ID, "event-cost").unwrap(),
+            [provider_cost(1_234_567)]
+        );
+
+        original.costs = vec![provider_cost(9_999_999)];
+        let error = database
+            .apply_ingest(ingest_request(WriteMode::Append, vec![original]))
+            .unwrap_err();
+        assert!(matches!(error, StorageError::EventIdentityConflict { .. }));
+        assert_eq!(
+            database.event_costs(SOURCE_ID, "event-cost").unwrap(),
+            [provider_cost(1_234_567)]
+        );
+    }
+
+    #[test]
     fn duplicate_identity_requires_semantic_provenance_but_not_the_same_offset() {
         let mut database = registered_database();
         database
@@ -1293,13 +1456,12 @@ mod tests {
     #[test]
     fn replace_deletes_only_events_owned_by_the_source() {
         let mut database = registered_database();
+        let mut costed = record("event-001", 1_704_067_200_000, 10);
+        costed.costs.push(provider_cost(1_000_000));
         database
             .apply_ingest(ingest_request(
                 WriteMode::Append,
-                vec![
-                    record("event-001", 1_704_067_200_000, 10),
-                    record("event-002", 1_704_153_600_000, 20),
-                ],
+                vec![costed, record("event-002", 1_704_153_600_000, 20)],
             ))
             .unwrap();
 
@@ -1312,6 +1474,29 @@ mod tests {
 
         assert_eq!(report.deleted_records, 2);
         assert_eq!(database.event_ids(SOURCE_ID).unwrap(), ["event-003"]);
+        assert!(
+            database
+                .event_costs(SOURCE_ID, "event-001")
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn invalid_cost_rolls_back_its_usage_event() {
+        let mut database = registered_database();
+        let mut invalid = record("event-invalid-cost", 1_704_067_200_000, 10);
+        invalid.costs.push(CostFact {
+            kind: CostKind::SubscriptionCredit,
+            usd: Some(NanoUsd::from_nanos(1)),
+            confidence: DataConfidence::Exact,
+        });
+
+        let error = database
+            .apply_ingest(ingest_request(WriteMode::Append, vec![invalid]))
+            .unwrap_err();
+        assert!(matches!(error, StorageError::InvalidCostFact { .. }));
+        assert_eq!(database.event_count(SOURCE_ID).unwrap(), 0);
     }
 
     #[test]
@@ -1437,6 +1622,7 @@ mod tests {
                 source_reported_total: Some(input + 2),
                 confidence: DataConfidence::Exact,
             },
+            costs: Vec::new(),
             provenance: EventProvenance {
                 native_id: Some(id.into()),
                 record_offset: Some(0),
@@ -1444,6 +1630,14 @@ mod tests {
                 timestamp_origin: TimestampOrigin::Source,
                 normalization_notes: Vec::new(),
             },
+        }
+    }
+
+    fn provider_cost(nanos: u64) -> CostFact {
+        CostFact {
+            kind: CostKind::ProviderReported,
+            usd: Some(NanoUsd::from_nanos(nanos)),
+            confidence: DataConfidence::Exact,
         }
     }
 }

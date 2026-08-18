@@ -259,6 +259,7 @@ impl LocalRecord {
                 source_reported_total: None,
                 confidence: self.confidence,
             },
+            costs: Vec::new(),
             provenance: EventProvenance {
                 native_id: self.native_id,
                 record_offset: None,

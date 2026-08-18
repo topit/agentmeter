@@ -49,9 +49,15 @@ fn pi_fork_and_summary_usage_flow_into_the_ledger_once() {
             })
             .unwrap();
         let batch = adapter.ingest(source, IngestStart::Fresh).unwrap();
+        let cost_event_ids = batch
+            .records
+            .iter()
+            .filter(|record| !record.costs.is_empty())
+            .map(|record| record.event.id.clone())
+            .collect::<Vec<_>>();
         database
             .apply_ingest(IngestRequest {
-                source_object_id: source_id,
+                source_object_id: source_id.clone(),
                 parser_version: adapter.parser_version(),
                 mode: WriteMode::Append,
                 source_fingerprint: batch.source_fingerprint,
@@ -64,6 +70,11 @@ fn pi_fork_and_summary_usage_flow_into_the_ledger_once() {
                 warnings: batch.warnings,
             })
             .unwrap();
+        for event_id in cost_event_ids {
+            let costs = database.event_costs(&source_id, &event_id).unwrap();
+            assert_eq!(costs.len(), 1);
+            assert_eq!(costs[0].usd.unwrap().as_nanos(), 1_000_000);
+        }
     }
 
     let daily = database.daily_usage_utc().unwrap();
@@ -93,7 +104,8 @@ fn assistant(id: &str, input: i64, output: i64) -> serde_json::Value {
         "message":{
             "role":"assistant","content":[],"provider":"provider-synthetic",
             "model":"model-synthetic","timestamp":1704067202000_i64,
-            "usage":{"input":input,"output":output,"cacheRead":0,"cacheWrite":0,"totalTokens":input+output}
+            "usage":{"input":input,"output":output,"cacheRead":0,"cacheWrite":0,"totalTokens":input+output,
+                "cost":{"input":0.0004,"output":0.0006,"cacheRead":0,"cacheWrite":0,"total":0.001}}
         }
     })
 }

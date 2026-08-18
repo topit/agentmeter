@@ -245,6 +245,7 @@ impl ReferenceEvent {
                 source_reported_total: self.source_reported_total,
                 confidence: DataConfidence::Exact,
             },
+            costs: Vec::new(),
             provenance: EventProvenance {
                 native_id: Some(native_id),
                 record_offset,
