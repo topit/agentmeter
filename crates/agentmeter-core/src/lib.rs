@@ -77,6 +77,65 @@ pub struct UsageRecord {
     pub provenance: EventProvenance,
 }
 
+/// Collection state for one configured installation or discovered source.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SourceHealthState {
+    Healthy,
+    Partial,
+    SetupRequired,
+    UnsupportedSchema,
+    Error,
+    Disabled,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SourcePermissionState {
+    Unknown,
+    Granted,
+    Denied,
+    Missing,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SourceRemediation {
+    ConfigurePath,
+    GrantPermission,
+    UpgradeAgentMeter,
+    RetryCollection,
+    ReviewWarnings,
+}
+
+/// Immutable local source facts consumed by presentation code. Paths remain
+/// local UI data and must be redacted before any diagnostics export.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SourceHealth {
+    pub installation_id: String,
+    pub source_object_id: Option<String>,
+    pub adapter_id: String,
+    pub root_path: String,
+    pub native_path: Option<String>,
+    pub source_kind: Option<String>,
+    pub enabled: bool,
+    pub permission: SourcePermissionState,
+    pub parser_version: Option<u32>,
+    pub last_scan_unix_ms: Option<i64>,
+    pub last_success_unix_ms: Option<i64>,
+    pub last_event_unix_ms: Option<i64>,
+    pub records_changed: u64,
+    pub warnings: Vec<String>,
+    pub error: Option<String>,
+    pub state: SourceHealthState,
+    pub remediation: Option<SourceRemediation>,
+}
+
+/// A generation changes whenever any exposed health fact changes. Consumers
+/// can reject stale asynchronous responses by comparing this value.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SourceHealthSnapshot {
+    pub generation: u64,
+    pub sources: Vec<SourceHealth>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::TokenBreakdown;

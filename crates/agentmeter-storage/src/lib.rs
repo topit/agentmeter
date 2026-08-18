@@ -2,7 +2,10 @@
 
 use std::path::Path;
 
-use agentmeter_core::{DataConfidence, TimestampOrigin, TokenBreakdown, UsageEvent, UsageRecord};
+use agentmeter_core::{
+    DataConfidence, SourceHealth, SourceHealthSnapshot, SourceHealthState, SourcePermissionState,
+    SourceRemediation, TimestampOrigin, TokenBreakdown, UsageEvent, UsageRecord,
+};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde::Serialize;
 use thiserror::Error;
@@ -215,22 +218,18 @@ impl Database {
 
     pub fn register_source(&mut self, registration: &SourceRegistration) -> Result<()> {
         let transaction = self.connection.transaction()?;
-        transaction.execute(
-            "INSERT INTO source_installations (
-                id, adapter_id, platform, root_path, discovery_method, enabled, permission_state
-             ) VALUES (?1, ?2, ?3, ?4, ?5, 1, 'granted')
-             ON CONFLICT(id) DO UPDATE SET
-                adapter_id = excluded.adapter_id,
-                platform = excluded.platform,
-                root_path = excluded.root_path,
-                discovery_method = excluded.discovery_method",
-            params![
-                registration.installation_id,
-                registration.adapter_id,
-                registration.platform,
-                registration.root_path,
-                registration.discovery_method,
-            ],
+        upsert_installation(
+            &transaction,
+            &SourceInstallationRegistration {
+                installation_id: registration.installation_id.clone(),
+                adapter_id: registration.adapter_id.clone(),
+                platform: registration.platform.clone(),
+                root_path: registration.root_path.clone(),
+                discovery_method: registration.discovery_method.clone(),
+                enabled: true,
+                permission: SourcePermissionState::Granted,
+            },
+            false,
         )?;
         transaction.execute(
             "INSERT INTO source_objects (id, installation_id, native_path, kind)
@@ -246,6 +245,70 @@ impl Database {
                 registration.kind,
             ],
         )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn register_installation(
+        &mut self,
+        registration: &SourceInstallationRegistration,
+    ) -> Result<()> {
+        let transaction = self.connection.transaction()?;
+        upsert_installation(&transaction, registration, true)?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn set_installation_state(
+        &mut self,
+        installation_id: &str,
+        enabled: bool,
+        permission: SourcePermissionState,
+    ) -> Result<()> {
+        self.connection.execute(
+            "UPDATE source_installations
+             SET enabled = ?2, permission_state = ?3
+             WHERE id = ?1",
+            params![installation_id, enabled, permission_state_str(permission)],
+        )?;
+        Ok(())
+    }
+
+    pub fn record_collection_failure(
+        &mut self,
+        source_object_id: &str,
+        observed_at_unix_ms: i64,
+        kind: CollectionFailureKind,
+        message: &str,
+    ) -> Result<()> {
+        if !self.source_exists(source_object_id)? {
+            return Err(StorageError::SourceNotRegistered(
+                source_object_id.to_owned(),
+            ));
+        }
+        let stored_error = encode_collection_error(kind, message);
+        let transaction = self.connection.transaction()?;
+        transaction.execute(
+            "INSERT INTO ingest_runs (
+                source_object_id, started_at_unix_ms, finished_at_unix_ms,
+                status, mode, warnings_json, error
+             ) VALUES (?1, ?2, ?2, 'failed', 'append', '[]', ?3)",
+            params![source_object_id, observed_at_unix_ms, stored_error],
+        )?;
+        transaction.execute(
+            "UPDATE source_objects
+             SET last_scan_unix_ms = ?2, last_error = ?3
+             WHERE id = ?1",
+            params![source_object_id, observed_at_unix_ms, stored_error],
+        )?;
+        if kind == CollectionFailureKind::Permission {
+            transaction.execute(
+                "UPDATE source_installations
+                 SET permission_state = 'denied'
+                 WHERE id = (SELECT installation_id FROM source_objects WHERE id = ?1)",
+                params![source_object_id],
+            )?;
+        }
         transaction.commit()?;
         Ok(())
     }
@@ -398,6 +461,12 @@ impl Database {
                 request.observed_at_unix_ms,
             ],
         )?;
+        transaction.execute(
+            "UPDATE source_installations
+             SET permission_state = 'granted'
+             WHERE id = (SELECT installation_id FROM source_objects WHERE id = ?1)",
+            params![request.source_object_id],
+        )?;
 
         rebuild_daily_usage_in(&transaction)?;
         transaction.execute(
@@ -504,6 +573,58 @@ impl Database {
             .map_err(Into::into)
     }
 
+    pub fn source_health_snapshot(&self) -> Result<SourceHealthSnapshot> {
+        let mut statement = self.connection.prepare(
+            "SELECT
+                i.id, i.adapter_id, i.root_path, i.enabled, i.permission_state,
+                s.id, s.native_path, s.kind, s.parser_version,
+                s.last_scan_unix_ms, s.last_success_unix_ms, s.last_error,
+                (SELECT MAX(e.occurred_at_unix_ms)
+                   FROM usage_events AS e WHERE e.source_object_id = s.id),
+                COALESCE((SELECT r.inserted_records + r.deleted_records
+                   FROM ingest_runs AS r WHERE r.source_object_id = s.id
+                   ORDER BY r.id DESC LIMIT 1), 0),
+                (SELECT r.status FROM ingest_runs AS r
+                   WHERE r.source_object_id = s.id ORDER BY r.id DESC LIMIT 1),
+                (SELECT r.warnings_json FROM ingest_runs AS r
+                   WHERE r.source_object_id = s.id ORDER BY r.id DESC LIMIT 1),
+                (SELECT r.error FROM ingest_runs AS r
+                   WHERE r.source_object_id = s.id ORDER BY r.id DESC LIMIT 1)
+             FROM source_installations AS i
+             LEFT JOIN source_objects AS s ON s.installation_id = i.id
+             ORDER BY i.adapter_id, i.id, s.id",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(RawSourceHealth {
+                installation_id: row.get(0)?,
+                adapter_id: row.get(1)?,
+                root_path: row.get(2)?,
+                enabled: row.get(3)?,
+                permission: row.get(4)?,
+                source_object_id: row.get(5)?,
+                native_path: row.get(6)?,
+                source_kind: row.get(7)?,
+                parser_version: row.get(8)?,
+                last_scan_unix_ms: row.get(9)?,
+                last_success_unix_ms: row.get(10)?,
+                last_error: row.get(11)?,
+                last_event_unix_ms: row.get(12)?,
+                records_changed: row.get(13)?,
+                last_run_status: row.get(14)?,
+                warnings_json: row.get(15)?,
+                run_error: row.get(16)?,
+            })
+        })?;
+        let mut sources = Vec::new();
+        for row in rows {
+            sources.push(row?.into_health()?);
+        }
+        Ok(SourceHealthSnapshot {
+            generation: health_generation(&sources),
+            sources,
+        })
+    }
+
     #[cfg(test)]
     fn journal_mode(&self) -> Result<String> {
         Ok(self
@@ -522,6 +643,127 @@ pub struct SourceRegistration {
     pub discovery_method: String,
     pub native_path: String,
     pub kind: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SourceInstallationRegistration {
+    pub installation_id: String,
+    pub adapter_id: String,
+    pub platform: String,
+    pub root_path: String,
+    pub discovery_method: String,
+    pub enabled: bool,
+    pub permission: SourcePermissionState,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CollectionFailureKind {
+    Collection,
+    Permission,
+    UnsupportedSchema,
+}
+
+struct RawSourceHealth {
+    installation_id: String,
+    adapter_id: String,
+    root_path: String,
+    enabled: bool,
+    permission: String,
+    source_object_id: Option<String>,
+    native_path: Option<String>,
+    source_kind: Option<String>,
+    parser_version: Option<u32>,
+    last_scan_unix_ms: Option<i64>,
+    last_success_unix_ms: Option<i64>,
+    last_error: Option<String>,
+    last_event_unix_ms: Option<i64>,
+    records_changed: i64,
+    last_run_status: Option<String>,
+    warnings_json: Option<String>,
+    run_error: Option<String>,
+}
+
+impl RawSourceHealth {
+    fn into_health(self) -> Result<SourceHealth> {
+        let permission = parse_permission_state(&self.permission);
+        let warnings: Vec<String> = self
+            .warnings_json
+            .as_deref()
+            .map(serde_json::from_str)
+            .transpose()?
+            .unwrap_or_default();
+        let encoded_error = self.run_error.or(self.last_error);
+        let (failure_kind, error) = encoded_error
+            .as_deref()
+            .map(decode_collection_error)
+            .map_or((None, None), |(kind, message)| {
+                (Some(kind), Some(message.to_owned()))
+            });
+        let unsupported = failure_kind == Some(CollectionFailureKind::UnsupportedSchema)
+            || warnings
+                .iter()
+                .any(|warning| warning_is_unsupported(warning));
+        let failed = self.last_run_status.as_deref() == Some("failed") || error.is_some();
+        let (state, remediation) = if !self.enabled {
+            (SourceHealthState::Disabled, None)
+        } else if permission != SourcePermissionState::Granted {
+            (
+                SourceHealthState::SetupRequired,
+                Some(match permission {
+                    SourcePermissionState::Denied => SourceRemediation::GrantPermission,
+                    SourcePermissionState::Missing => SourceRemediation::ConfigurePath,
+                    SourcePermissionState::Unknown => SourceRemediation::RetryCollection,
+                    SourcePermissionState::Granted => unreachable!(),
+                }),
+            )
+        } else if self.source_object_id.is_none() {
+            (
+                SourceHealthState::SetupRequired,
+                Some(SourceRemediation::ConfigurePath),
+            )
+        } else if self.last_success_unix_ms.is_none() && !failed {
+            (
+                SourceHealthState::SetupRequired,
+                Some(SourceRemediation::RetryCollection),
+            )
+        } else if unsupported {
+            (
+                SourceHealthState::UnsupportedSchema,
+                Some(SourceRemediation::UpgradeAgentMeter),
+            )
+        } else if failed {
+            (
+                SourceHealthState::Error,
+                Some(SourceRemediation::RetryCollection),
+            )
+        } else if !warnings.is_empty() {
+            (
+                SourceHealthState::Partial,
+                Some(SourceRemediation::ReviewWarnings),
+            )
+        } else {
+            (SourceHealthState::Healthy, None)
+        };
+        Ok(SourceHealth {
+            installation_id: self.installation_id,
+            source_object_id: self.source_object_id,
+            adapter_id: self.adapter_id,
+            root_path: self.root_path,
+            native_path: self.native_path,
+            source_kind: self.source_kind,
+            enabled: self.enabled,
+            permission,
+            parser_version: self.parser_version.filter(|version| *version != 0),
+            last_scan_unix_ms: self.last_scan_unix_ms,
+            last_success_unix_ms: self.last_success_unix_ms,
+            last_event_unix_ms: self.last_event_unix_ms,
+            records_changed: self.records_changed.max(0) as u64,
+            warnings,
+            error,
+            state,
+            remediation,
+        })
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -597,6 +839,148 @@ pub struct DailyUsage {
     pub model: String,
     pub tokens: TokenBreakdown,
     pub event_count: u64,
+}
+
+fn upsert_installation(
+    transaction: &Transaction<'_>,
+    registration: &SourceInstallationRegistration,
+    update_state: bool,
+) -> Result<()> {
+    let conflict_clause = if update_state {
+        "enabled = excluded.enabled,
+         permission_state = excluded.permission_state"
+    } else {
+        "enabled = source_installations.enabled,
+         permission_state = source_installations.permission_state"
+    };
+    transaction.execute(
+        &format!(
+            "INSERT INTO source_installations (
+            id, adapter_id, platform, root_path, discovery_method, enabled, permission_state
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+         ON CONFLICT(id) DO UPDATE SET
+            adapter_id = excluded.adapter_id,
+            platform = excluded.platform,
+            root_path = excluded.root_path,
+            discovery_method = excluded.discovery_method,
+            {conflict_clause}"
+        ),
+        params![
+            registration.installation_id,
+            registration.adapter_id,
+            registration.platform,
+            registration.root_path,
+            registration.discovery_method,
+            registration.enabled,
+            permission_state_str(registration.permission),
+        ],
+    )?;
+    Ok(())
+}
+
+fn permission_state_str(state: SourcePermissionState) -> &'static str {
+    match state {
+        SourcePermissionState::Unknown => "unknown",
+        SourcePermissionState::Granted => "granted",
+        SourcePermissionState::Denied => "denied",
+        SourcePermissionState::Missing => "missing",
+    }
+}
+
+fn parse_permission_state(value: &str) -> SourcePermissionState {
+    match value {
+        "granted" => SourcePermissionState::Granted,
+        "denied" => SourcePermissionState::Denied,
+        "missing" => SourcePermissionState::Missing,
+        _ => SourcePermissionState::Unknown,
+    }
+}
+
+fn encode_collection_error(kind: CollectionFailureKind, message: &str) -> String {
+    let prefix = match kind {
+        CollectionFailureKind::Collection => "collection",
+        CollectionFailureKind::Permission => "permission",
+        CollectionFailureKind::UnsupportedSchema => "unsupported_schema",
+    };
+    format!("[{prefix}] {message}")
+}
+
+fn decode_collection_error(value: &str) -> (CollectionFailureKind, &str) {
+    for (prefix, kind) in [
+        (
+            "[unsupported_schema] ",
+            CollectionFailureKind::UnsupportedSchema,
+        ),
+        ("[permission] ", CollectionFailureKind::Permission),
+        ("[collection] ", CollectionFailureKind::Collection),
+    ] {
+        if let Some(message) = value.strip_prefix(prefix) {
+            return (kind, message);
+        }
+    }
+    (CollectionFailureKind::Collection, value)
+}
+
+fn warning_is_unsupported(warning: &str) -> bool {
+    let normalized = warning.to_ascii_lowercase();
+    normalized.contains("unsupported schema")
+        || normalized.contains("unsupported") && normalized.contains("schema")
+        || normalized.contains("newer than version")
+}
+
+fn health_generation(sources: &[SourceHealth]) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for source in sources {
+        hash_health_string(&mut hash, &source.installation_id);
+        hash_health_option(&mut hash, source.source_object_id.as_deref());
+        hash_health_string(&mut hash, &source.adapter_id);
+        hash_health_string(&mut hash, &source.root_path);
+        hash_health_option(&mut hash, source.native_path.as_deref());
+        hash_health_option(&mut hash, source.source_kind.as_deref());
+        hash_health_bytes(&mut hash, &[source.enabled as u8]);
+        hash_health_bytes(&mut hash, &[source.permission as u8]);
+        hash_health_bytes(
+            &mut hash,
+            &source.parser_version.unwrap_or_default().to_le_bytes(),
+        );
+        for timestamp in [
+            source.last_scan_unix_ms,
+            source.last_success_unix_ms,
+            source.last_event_unix_ms,
+        ] {
+            hash_health_bytes(&mut hash, &timestamp.unwrap_or(i64::MIN).to_le_bytes());
+        }
+        hash_health_bytes(&mut hash, &source.records_changed.to_le_bytes());
+        for warning in &source.warnings {
+            hash_health_string(&mut hash, warning);
+        }
+        hash_health_option(&mut hash, source.error.as_deref());
+        hash_health_bytes(&mut hash, &[source.state as u8]);
+        hash_health_bytes(
+            &mut hash,
+            &[source.remediation.map_or(u8::MAX, |value| value as u8)],
+        );
+    }
+    hash
+}
+
+fn hash_health_option(hash: &mut u64, value: Option<&str>) {
+    hash_health_bytes(hash, &[value.is_some() as u8]);
+    if let Some(value) = value {
+        hash_health_string(hash, value);
+    }
+}
+
+fn hash_health_string(hash: &mut u64, value: &str) {
+    hash_health_bytes(hash, &(value.len() as u64).to_le_bytes());
+    hash_health_bytes(hash, value.as_bytes());
+}
+
+fn hash_health_bytes(hash: &mut u64, bytes: &[u8]) {
+    for byte in bytes {
+        *hash ^= u64::from(*byte);
+        *hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
 }
 
 fn upsert_session(

@@ -16,7 +16,7 @@ Every commit must include the corresponding update to this file: task status, de
 
 ## Operational reality
 
-- Base revision: `75ec3c7` (`Add incremental Pi session collector`)
+- Base revision: `27372d3` (`Require roadmap updates before commits`)
 - Branch: `main`, tracking GitHub `github/main`; M1 through M2-04 have been pushed
 - Additional remote: Amp-hosted `origin` remains read-only for this work
 - Amp project and `origin` still use `moeit/token-usage` pending a Puck-managed rename
@@ -41,7 +41,8 @@ Every commit must include the corresponding update to this file: task status, de
 | M2-03a Codex JSONL core | coordinator | `fcc9481` | official protocol research | pushed | cumulative/incremental/archive fixtures; storage pipeline; workspace checks | committed and pushed as `cabf805` |
 | M2-03b Codex lineage | coordinator | `cabf805` | official history lineage | pushed | paginated/legacy fork, replay, revert and archive fixtures | committed and pushed as `5b54c3e` |
 | M2-04 Pi | coordinator | `5b54c3e` | upstream format research | pushed | fixture and cross-check suite | committed and pushed as `75ec3c7` |
-| M2-05 Source health | coordinator | `75ec3c7` | collector diagnostics and checkpoints | queued | portable health-state tests; storage integration; workspace checks | implement the source-health model and immutable snapshots |
+| M2-05 Source health | coordinator | `27372d3` | collector diagnostics and checkpoints | integrated | portable health-state tests; storage integration; workspace checks | all health states, generations, remediation and i18n mappings verified; ready to commit and push |
+| M2-06 Cost facts | coordinator | M2-05 | canonical event-cost ingestion contract | queued | provider-cost atomicity; Pi pipeline; workspace checks | persist provider-reported cost separately from estimates and credits |
 
 ## Verification contract
 
@@ -128,6 +129,17 @@ Every commit must include the corresponding update to this file: task status, de
 - Collector-to-storage integration verifies copied fork usage is counted once while child and branch-summary work reaches canonical daily projections.
 - Waku, Tokens, Tokscale, and ccusage were cross-checks only. AgentMeter additionally counts official summary usage, uses native lineage IDs, and does not convert componentless totals into guessed output.
 - `git diff --check` passed. Privacy scanning found only policy examples and intentional `/fixture/home/...` synthetic paths; no source logs, content-bearing payloads, secrets, or real user paths were added.
+
+## M2-05 verification evidence
+
+- `cargo fmt --all --check`, `cargo check --workspace --all-targets`, and `cargo clippy --workspace --all-targets -- -D warnings`: passed.
+- `cargo test --workspace`: passed (63 tests: 54 unit tests and 9 storage/pipeline integration tests).
+- `agentmeter-core` now owns immutable `SourceHealthSnapshot` domain types and structured state, permission, and remediation enums; paths are explicitly local-only facts that require redaction before export.
+- One storage query derives installation/source identity, parser version, last scan/success/event, latest records changed, warnings, errors, and deterministic content generations from existing canonical tables without a schema migration.
+- Explicit pre-batch collection failures are persisted with typed collection, permission, or unsupported-schema classification. Successful ingestion clears stale errors and proves granted permission without re-enabling a user-disabled installation.
+- Integration coverage exercises missing setup, never-scanned sources, healthy and partial runs, warning- and failure-based unsupported schemas, generic errors, denied/recovered permission, disabled-state preservation across rediscovery, and stable/changing generations.
+- Desktop localization maps every health state and remediation to complete English and Simplified Chinese messages; presentation code does not parse diagnostic prose.
+- `git diff --check` passed. Privacy scanning found only policy examples and intentional `/fixture/home/...` synthetic paths; no real paths, source logs, content-bearing payloads, or secrets were added.
 
 ## Budget ledger
 

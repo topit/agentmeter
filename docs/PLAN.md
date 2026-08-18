@@ -106,6 +106,8 @@ Start with one process and strict internal boundaries:
 
 Split out a helper process only if measured requirements show that collection must survive UI crashes or upgrades. Avoid helper signing and IPC complexity in the first release.
 
+Source health is a portable core snapshot populated by storage, not a GPUI-owned state machine. Each immutable generation contains installation/source identity, enabled and permission state, parser version, last scan/success/event, latest changed-record count, warnings, error, status, and structured remediation. States are `Healthy`, `Partial`, `SetupRequired`, `UnsupportedSchema`, `Error`, and `Disabled`. Snapshot generation is a stable fingerprint of exposed health facts so asynchronous consumers can reject stale responses without a schema-only revision counter. Local paths may be shown in the Sources UI but must be redacted before diagnostics export.
+
 ## 5. Ingestion contract
 
 Each collector adapter must provide:
@@ -490,4 +492,4 @@ These decisions do not block M1 but should be settled before macOS beta:
 
 ## 19. Immediate next implementation step
 
-Implement the M2 source-health model and wire collector diagnostics/checkpoints into portable health snapshots. Cost-fact ingestion, periodic reconciliation, and cross-check reporting remain M2 gates; Codex compressed/headless variants and Pi's retained legacy location must be assessed before either adapter is called supported.
+Carry provider-reported cost facts through the core ingestion contract into `event_costs`, beginning with Pi and preserving source currency semantics without treating subscription credits as USD. Periodic reconciliation and cross-check reporting remain M2 gates; Codex compressed/headless variants and Pi's retained legacy location must be assessed before either adapter is called supported.
