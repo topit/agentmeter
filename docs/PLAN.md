@@ -1,6 +1,6 @@
 # AgentMeter product and engineering plan
 
-- Status: M3 implementation complete (shell, overview, sources, settings); native visual acceptance pending Metal Toolchain repair
+- Status: M3 complete and CI-verified (shell, overview, sources, settings; visual matrix on every push); M4 coverage and pricing next
 - Product name: AgentMeter
 - Primary platform: macOS
 - Future platform: Windows
@@ -422,15 +422,16 @@ Exit: append, rewrite, truncation, parser upgrade, rollback, and projection rebu
 
 Exit: all “supported” criteria pass for three adapters.
 
-### M3 — GPUI application shell
+### M3 — GPUI application shell (complete)
 
 - pin tested GPUI revision;
 - window, navigation, overview, sources, and settings;
 - SQLite query snapshots and stale-result protection;
 - English/Chinese and system/light/dark support;
-- accessible source remediation flows.
+- accessible source remediation flows;
+- CI on public-repository GitHub Actions runs the gates on Linux and macOS (Metal Toolchain, production features) and captures the locale/theme visual matrix on every push.
 
-Exit: representative UI states verified in four locale/theme combinations per theme matrix, including both themes and both locales.
+Exit: met. Representative UI states were verified in all four locale/theme combinations from production-feature builds on hosted Apple Silicon runners; see the M3-06 evidence in `docs/STATUS.md`. An interactive keyboard/accessibility pass on a local Mac is recommended before M5 packaging.
 
 ### M4 — Coverage and pricing
 
@@ -499,4 +500,4 @@ These decisions do not block M1 but should be settled before macOS beta:
 
 ## 19. Immediate next implementation step
 
-M3 implementation is complete. CI on GitHub Actions (public repository: free hosted macOS runners) now runs the repository gates on Linux, re-runs them on an Apple Silicon macOS runner with the Metal Toolchain and production features, builds the desktop app, and captures the 12-shot Overview/Sources/Settings × English/Chinese × light/dark matrix as artifacts. The next step is to review the first green run's screenshot artifacts, record the evidence in `docs/STATUS.md`, and mark M3 exited; an interactive keyboard/accessibility pass on a local Mac is recommended before M5 packaging. After M3 exits, start M4-01 (Kimi/Kimi Code adapter) per the source roadmap.
+M3 is complete and exited with CI evidence. Start M4-01: research Kimi/Kimi Code's local `wire.jsonl` old/new layouts from upstream sources, then implement the adapter following the M2 pattern — discovery, sanitized fixtures for normal/duplicate/malformed/truncated/schema-drift cases, incremental checkpoints or a documented bounded replacement, health states and remediation, and cross-checked totals. CI keeps validating every push; the local Mac's Metal Toolchain repair is optional until interactive pre-packaging work begins.

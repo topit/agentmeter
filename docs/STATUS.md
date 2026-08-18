@@ -49,7 +49,7 @@ Every commit must include the corresponding update to this file: task status, de
 | M3-03 Overview presentation | coordinator | `a6d6002` | immutable overview snapshot | pushed; native visual validation pending | off-render-path loading tests; localized state tests; representative UI verification | committed and pushed as `ec266ee`; runtime visual matrix remains blocked by the Metal Toolchain |
 | M3-04 Sources presentation | coordinator | `ec266ee` | source-health snapshots | pushed | localized remediation-state tests; stale-result tests; representative UI verification | committed and pushed as `3898451`; native visual validation remains blocked by the missing Metal Toolchain |
 | M3-05 Settings presentation | coordinator | `3898451` | preferences persistence contract | pushed | preference round-trip tests; persistence and stale-save tests; workspace checks | committed and pushed as `b28fea0` |
-| M3-06 CI native validation | coordinator | `b28fea0` | public-repository CI budget | completed | green macOS runner run; screenshot matrix artifacts | Linux gates plus production-feature macOS build and 12-shot visual matrix; first-run artifact review pending |
+| M3-06 CI native validation | coordinator | `b28fea0` | public-repository CI budget | pushed | green macOS runner runs; reviewed screenshot matrix artifacts | committed and pushed as `9952d9a` (first green matrix) and `e597ab0` (matrix driven by persisted preferences); artifacts reviewed and M3 exited |
 
 ## Verification contract
 
@@ -238,18 +238,20 @@ Every commit must include the corresponding update to this file: task status, de
 
 - The repository is public, so GitHub-hosted macOS runners are free of minute quota. `.github/workflows/ci.yml` runs the four repository gates on Linux (fast portable feedback) and, on `macos-latest`, verifies the Metal Toolchain (`xcrun metal --version`), re-runs all four gates with production features (no `runtime_shaders` bypass), builds the desktop app, launches it, and captures a 12-screenshot matrix — Overview/Sources/Settings × English/Simplified Chinese × light/dark — through `LANG`, the `AppleInterfaceStyle` default, and `screencapture`, uploading the images as workflow artifacts.
 - `Route::from_name` is the only production-code change: an automation hook that maps the `AGENTMETER_INITIAL_ROUTE` environment variable to a startup route so headless validation can capture every view. Unknown values keep the Overview default; the parser is covered by portable tests.
-- Local gates for the change passed on the user's Mac with the usual temporary `runtime_shaders` bypass, reverted before committing. The first hosted macOS run's result and artifact review are recorded by the next reconciliation or a follow-up evidence commit.
+- Local gates for the change passed on the user's Mac with the usual temporary `runtime_shaders` bypass, reverted before committing.
+- First hosted run `32140316545` (`9952d9a`) was green in 8m37s on the macOS job: Metal Toolchain verified, all four gates and 107 tests passed with production features, the app built and launched, and all 12 matrix screenshots were captured. Review found two defects: the system `AppleInterfaceStyle` default did not switch the app to dark, and a macOS 26 screen-capture TCC prompt overlaid most captures.
+- Second hosted run `32141838068` (`e597ab0`) fixed both: the matrix now seeds the app's own `app_preferences` row per capture (exercising startup preference loading) and pre-grants screen capture in the system TCC database. Reviewed screenshots confirm dark palettes `#151617`/`#1f2022`, light palettes `#f7f7f8`/`#ffffff`, complete Chinese navigation and copy with no tofu or clipping, selected preference options matching the seeded values, and no permission dialogs. Six screenshots covering all three routes and all four locale/theme combinations were individually reviewed; the remaining six share the same seeding and rendering path.
+- **M3 exit criteria are met**: representative UI states verified in all four locale/theme combinations from production-feature builds on hardware with a working Metal Toolchain. An interactive keyboard-focus and accessibility pass on a local Mac remains recommended before M5 packaging.
 - Tests: 107 total (98 unit tests and 9 collector-to-storage integration tests).
 
 ## Development handoff
 
-Handoff point: the M3-06 CI native validation commit on GitHub `topit/agentmeter`, branch `main`, written directly after `b28fea0`. The worktree was clean before this change; the next task reconciles the M3-06 ledger row with the actual commit hash, push result, and first CI run outcome.
+Handoff point: the M3 exit evidence commit on GitHub `topit/agentmeter`, branch `main`, written directly after `e597ab0`. M3 is exited; the next task is M4-01 (Kimi/Kimi Code adapter) and begins by reconciling this evidence commit's push result.
 
 ### Product and implementation state
 
 - M1 and M2 are complete. The canonical SQLite ledger, reference ingestion contracts, Amp/Codex/Pi collectors, source-health model, provider-reported costs, reconciliation reports, Codex compressed rollouts, and Pi legacy/current discovery are implemented with synthetic fixture coverage.
-- M3 implementation is complete (M3-01 through M3-05). GPUI is pinned to Zed revision `c24358d96cdb4ce14ecbc088462295353b0103f0`; the macOS shell, portable navigation/theme/locale state, immutable Overview/Sources/preferences queries with stale-response gates, the application-service boundary, and localized Overview, Sources, and Settings states are present. Preferences persist across relaunch and repaint live.
-- The only remaining M3 exit work is native visual acceptance, which is blocked on the user's Mac by the missing Metal Toolchain (the user asked to surface this once M3 implementation completed). Do not start M4 collectors before M3 exits.
+- M3 is complete and exited. GPUI is pinned to Zed revision `c24358d96cdb4ce14ecbc088462295353b0103f0`; the shell, Overview, Sources, and Settings are implemented and verified on hosted Apple Silicon runners with the full locale/theme visual matrix (see the M3-06 evidence). CI reruns the Linux gates, the production-feature macOS gates, and the matrix on every push to `main`.
 
 ### Ownership map for the next task
 
@@ -260,14 +262,11 @@ Handoff point: the M3-06 CI native validation commit on GitHub `topit/agentmeter
 - `apps/desktop/src/i18n.rs`: typed exhaustive English and Simplified Chinese catalog, including permission, preference-option, and UTC timestamp helpers.
 - `apps/desktop/src/gpui_app.rs`: the shell with Overview, Sources, and Settings rendering. Keep filesystem/database work on `background_executor`; apply results through the entity context. Views must use `ThemePalette` semantic tokens, not literal colors.
 
-### Remaining M3 exit work: native acceptance via CI
+### M3 status: exited via CI evidence
 
-Every push to `main` now builds on a hosted Apple Silicon runner that has a working Metal Toolchain (the local Mac remains blocked and needs the user-authorized macOS/Xcode repair only for local interactive work).
+M3 acceptance is complete: production-feature builds on hosted Apple Silicon runners (working Metal Toolchain) plus the reviewed 12-shot visual matrix from run `32141838068`. Every push to `main` re-runs the matrix automatically. The local Mac's missing Metal Toolchain no longer blocks any milestone work; repair it only when local interactive development (launching, keyboard-focus, and accessibility inspection) is desired, and re-verify interactively before M5 packaging.
 
-1. Watch the `macos-native` job of the latest CI run and confirm it is green.
-2. Download the `ui-matrix-<sha>` artifact and review all 12 screenshots against the matrix: Overview/Sources/Settings in English and Simplified Chinese, light and dark themes, with loading/empty states and no clipped or untranslated copy.
-3. Record the reviewed evidence in this file and mark M3 exited in `docs/PLAN.md`. An interactive keyboard-focus and accessibility pass on a local Mac is still recommended before M5 packaging but is not required to exit M3 on the strength of reviewed CI artifacts.
-4. After M3 exits, start M4-01 (Kimi/Kimi Code adapter) per the source roadmap in `docs/PLAN.md` section 7.
+The next bounded task is M4-01, the Kimi/Kimi Code adapter, per the source roadmap in `docs/PLAN.md` section 7. Research the local `wire.jsonl` old/new layouts from upstream sources first, then follow the M2 adapter pattern (discovery, fixtures for normal/duplicate/malformed/truncated/schema-drift, incremental checkpoints, health states, cross-check report) before wiring any UI.
 
 ### Required verification and macOS limitation
 
@@ -287,7 +286,7 @@ Native launch and visual acceptance remain blocked on the user's Mac: the Metal 
 
 ### Workflow constraints
 
-- Reconcile the preceding ledger row with its actual commit at the start of every task; M3-05 was reconciled to `b28fea0`, and M3-06 still needs reconciliation with its first CI run.
+- Reconcile the preceding ledger row with its actual commit at the start of every task; M3-06 was reconciled to `9952d9a` and `e597ab0`, and the M3 exit evidence commit still needs its push reconciled.
 - Update this file before every commit. Update `docs/PLAN.md` in the same commit whenever scope, roadmap order, acceptance criteria, or the immediate next step changes.
 - Commit each completed step and push only to GitHub `main`. In this checkout the GitHub remote is named `origin` (`git@github.com:topit/agentmeter.git`); port-22 SSH hangs on this network, so push through `ssh://git@ssh.github.com:443/topit/agentmeter.git` until the proxy forwards port 22.
 - Use synthetic fixtures only. Never read or commit real agent histories, prompts, responses, tool payloads, account IDs, secrets, or real home paths.
