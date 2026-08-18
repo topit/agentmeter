@@ -1,7 +1,7 @@
 //! Incremental collector for official Codex CLI rollout JSONL files.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     env,
     fs::File,
     io::{BufRead, BufReader, Seek, SeekFrom},
@@ -23,8 +23,8 @@ use crate::{
     },
 };
 
-const PARSER_VERSION: u32 = 1;
-const SCHEMA_VARIANT: &str = "codex-rollout-jsonl-v1";
+const PARSER_VERSION: u32 = 2;
+const SCHEMA_VARIANT: &str = "codex-rollout-jsonl-v2";
 
 #[derive(Clone, Debug)]
 pub struct CodexJsonlAdapter {
@@ -146,7 +146,29 @@ impl CollectorAdapter for CodexJsonlAdapter {
             .seek(SeekFrom::Start(start_offset))
             .map_err(io_error)?;
         let mut records = Vec::new();
-        let mut warnings = Vec::new();
+        let (mut replay, mut warnings) = if start_offset == 0 {
+            self.lineage_plan(source, &mut state)
+        } else if state.legacy_replay_matching {
+            let mut lineage_state = ParserState::default();
+            let (mut replay, warnings) = self.lineage_plan(source, &mut lineage_state);
+            if replay.expected.len() < state.legacy_replay_cursor {
+                state.legacy_replay_matching = false;
+                state.lineage_unresolved = true;
+                (
+                    LegacyReplay::default(),
+                    vec![
+                        "Codex legacy parent prefix changed during resume; remaining records were retained"
+                            .to_owned(),
+                    ],
+                )
+            } else {
+                replay.cursor = state.legacy_replay_cursor;
+                replay.matching = true;
+                (replay, warnings)
+            }
+        } else {
+            (LegacyReplay::default(), Vec::new())
+        };
         let mut committed_offset = start_offset;
 
         loop {
@@ -176,6 +198,7 @@ impl CollectorAdapter for CodexJsonlAdapter {
                         trimmed.as_bytes(),
                         file_modified_unix_ms,
                         &mut state,
+                        &mut replay,
                         &mut warnings,
                     ) {
                         records.push(record);
@@ -204,6 +227,145 @@ impl CollectorAdapter for CodexJsonlAdapter {
     }
 }
 
+impl CodexJsonlAdapter {
+    fn lineage_plan(
+        &self,
+        source: &SourceCandidate,
+        state: &mut ParserState,
+    ) -> (LegacyReplay, Vec<String>) {
+        let Some(metadata) = read_first_metadata(&source.path) else {
+            return (LegacyReplay::default(), Vec::new());
+        };
+        if let Some(base) = metadata.history_base.as_ref() {
+            let mut seen = BTreeSet::new();
+            if let Some(rollout_id) = rollout_id(&source.source_key) {
+                seen.insert(rollout_id);
+            }
+            match self.paginated_baseline(&metadata, base, &mut seen) {
+                Ok(baseline) => state.previous_total = baseline,
+                Err(message) => {
+                    state.lineage_unresolved = true;
+                    return (
+                        LegacyReplay::default(),
+                        vec![format!("Codex paginated lineage unresolved: {message}")],
+                    );
+                }
+            }
+            return (LegacyReplay::default(), Vec::new());
+        }
+
+        let Some(parent_id) = metadata.forked_from_id.filter(|value| !value.is_empty()) else {
+            return (LegacyReplay::default(), Vec::new());
+        };
+        if metadata.id.as_deref() == Some(parent_id.as_str()) {
+            state.lineage_unresolved = true;
+            return (
+                LegacyReplay::default(),
+                vec![
+                    "Codex legacy fork has a self-referencing parent; replay was not deduplicated"
+                        .to_owned(),
+                ],
+            );
+        }
+        let Ok(sources) = self.discover() else {
+            state.lineage_unresolved = true;
+            return (
+                LegacyReplay::default(),
+                vec![
+                    "Codex legacy parent discovery failed; replay was not deduplicated".to_owned(),
+                ],
+            );
+        };
+        let parent = sources
+            .iter()
+            .filter(|candidate| candidate.path != source.path)
+            .filter_map(|candidate| {
+                let candidate_meta = read_first_metadata(&candidate.path)?;
+                let same_parent = candidate_meta.id.as_deref() == Some(parent_id.as_str());
+                let existed_at_fork = match (
+                    candidate_meta
+                        .timestamp
+                        .as_deref()
+                        .and_then(parse_rfc3339_millis),
+                    metadata.timestamp.as_deref().and_then(parse_rfc3339_millis),
+                ) {
+                    (Some(candidate_time), Some(fork_time)) => candidate_time <= fork_time,
+                    _ => false,
+                };
+                (same_parent && existed_at_fork).then_some(candidate)
+            })
+            .max_by(|left, right| left.source_key.cmp(&right.source_key));
+        let Some(parent) = parent else {
+            state.lineage_unresolved = true;
+            return (
+                LegacyReplay::default(),
+                vec![format!(
+                    "Codex legacy parent {parent_id} is missing; replay was not deduplicated"
+                )],
+            );
+        };
+        let signatures = read_token_signatures(&parent.path, metadata.timestamp.as_deref());
+        if signatures.is_empty() {
+            state.lineage_unresolved = true;
+            return (
+                LegacyReplay::default(),
+                vec![format!(
+                    "Codex legacy parent {parent_id} has no matchable usage prefix; replay was not deduplicated"
+                )],
+            );
+        }
+        state.legacy_replay_matching = true;
+        state.legacy_replay_cursor = 0;
+        (
+            LegacyReplay {
+                expected: signatures,
+                cursor: 0,
+                matching: true,
+            },
+            Vec::new(),
+        )
+    }
+
+    fn paginated_baseline(
+        &self,
+        child: &SessionMetadata,
+        base: &HistoryBase,
+        seen: &mut BTreeSet<String>,
+    ) -> Result<Option<RawUsage>, String> {
+        if child.history_mode.as_deref() != Some("paginated") {
+            return Err("history_base appears on a non-paginated rollout".to_owned());
+        }
+        if base.end_ordinal_exclusive == 0 {
+            return Err("parent cutoff ordinal is zero".to_owned());
+        }
+        if !seen.insert(base.thread_id.clone()) {
+            return Err(format!("lineage cycle at rollout {}", base.thread_id));
+        }
+        let sources = self.discover().map_err(|error| error.message)?;
+        let parent = sources
+            .iter()
+            .find(|candidate| rollout_id(&candidate.source_key).as_deref() == Some(&base.thread_id))
+            .ok_or_else(|| format!("parent rollout {} is missing", base.thread_id))?;
+        let parent_meta = read_first_metadata(&parent.path).ok_or_else(|| {
+            format!(
+                "parent rollout {} has no canonical metadata",
+                base.thread_id
+            )
+        })?;
+        if parent_meta.history_mode.as_deref() != Some("paginated") {
+            return Err(format!(
+                "parent rollout {} is not paginated",
+                base.thread_id
+            ));
+        }
+        let inherited = match parent_meta.history_base.as_ref() {
+            Some(parent_base) => self.paginated_baseline(&parent_meta, parent_base, seen),
+            None => Ok(None),
+        }?;
+        Ok(read_baseline_at(&parent.path, base)?.or(inherited))
+    }
+}
+
 #[derive(Default, Deserialize)]
 #[serde(default)]
 struct RolloutEnvelope {
@@ -222,16 +384,48 @@ struct RolloutPayload {
     id: Option<String>,
     session_id: Option<String>,
     forked_from_id: Option<String>,
+    history_mode: Option<String>,
+    history_base: Option<HistoryBase>,
     model_provider: Option<String>,
     model: Option<String>,
     info: Option<TokenUsageInfo>,
 }
 
-#[derive(Default, Deserialize)]
+#[derive(Clone, Default, Deserialize, Eq, PartialEq)]
 #[serde(default)]
 struct TokenUsageInfo {
     total_token_usage: Option<RawUsage>,
     last_token_usage: Option<RawUsage>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+struct HistoryBase {
+    thread_id: String,
+    end_ordinal_exclusive: u64,
+    end_byte_offset: u64,
+}
+
+#[derive(Default)]
+struct SessionMetadata {
+    id: Option<String>,
+    timestamp: Option<String>,
+    forked_from_id: Option<String>,
+    history_mode: Option<String>,
+    history_base: Option<HistoryBase>,
+}
+
+#[derive(Clone, Eq, PartialEq)]
+struct TokenSignature {
+    timestamp: Option<String>,
+    info: TokenUsageInfo,
+}
+
+#[derive(Default)]
+struct LegacyReplay {
+    expected: Vec<TokenSignature>,
+    cursor: usize,
+    matching: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -316,8 +510,13 @@ struct ParserState {
     model: Option<String>,
     provider: Option<String>,
     previous_total: Option<RawUsage>,
+    seen_session_meta: bool,
+    lineage_unresolved: bool,
+    legacy_replay_cursor: usize,
+    legacy_replay_matching: bool,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn process_envelope(
     envelope: RolloutEnvelope,
     source_key: &str,
@@ -325,24 +524,26 @@ fn process_envelope(
     raw_line: &[u8],
     file_modified_unix_ms: i64,
     state: &mut ParserState,
+    replay: &mut LegacyReplay,
     warnings: &mut Vec<String>,
 ) -> Option<UsageRecord> {
     match envelope.kind.as_str() {
         "session_meta" => {
-            if state.thread_id.is_none() {
+            if !state.seen_session_meta {
+                state.seen_session_meta = true;
                 state.thread_id = envelope
                     .payload
                     .id
                     .or(envelope.payload.session_id)
                     .filter(|id| !id.is_empty());
                 state.forked_from_id = envelope.payload.forked_from_id;
-            }
-            if let Some(provider) = envelope
-                .payload
-                .model_provider
-                .filter(|value| !value.is_empty())
-            {
-                state.provider = Some(provider);
+                if let Some(provider) = envelope
+                    .payload
+                    .model_provider
+                    .filter(|value| !value.is_empty())
+                {
+                    state.provider = Some(provider);
+                }
             }
             None
         }
@@ -358,6 +559,32 @@ fn process_envelope(
                     "Codex token_count at byte {record_offset} has no usage info; skipped"
                 ));
                 return None;
+            };
+            let suppress_replay = if replay.matching {
+                let signature = TokenSignature {
+                    timestamp: envelope.timestamp.clone(),
+                    info: info.clone(),
+                };
+                if replay.expected.get(replay.cursor) == Some(&signature) {
+                    replay.cursor += 1;
+                    state.legacy_replay_cursor = replay.cursor;
+                    if replay.cursor == replay.expected.len() {
+                        replay.matching = false;
+                        state.legacy_replay_matching = false;
+                    }
+                    true
+                } else {
+                    replay.matching = false;
+                    state.legacy_replay_matching = false;
+                    state.lineage_unresolved = true;
+                    warnings.push(format!(
+                        "Codex legacy replay diverged after {} matched usage records; remaining records were retained",
+                        replay.cursor
+                    ));
+                    false
+                }
+            } else {
+                false
             };
             let previous = state.previous_total.as_ref();
             if info
@@ -412,6 +639,9 @@ fn process_envelope(
                         .map_or_else(|| delta.clone(), |total| total.saturating_add(&delta)),
                 ),
             };
+            if suppress_replay {
+                return None;
+            }
             Some(finish_usage(
                 delta,
                 envelope.timestamp.as_deref(),
@@ -497,17 +727,21 @@ fn finish_usage(
         raw.reasoning_output_tokens,
         raw.total_tokens
     ));
-    if state.forked_from_id.is_some() {
-        normalization_notes.push(
-            "fork lineage observed; cross-file inherited-history deduplication is pending"
-                .to_owned(),
-        );
+    if state.lineage_unresolved {
+        derived = true;
+        normalization_notes
+            .push("lineage could not be resolved exactly; usage was retained".to_owned());
     }
 
     let thread_id = state.thread_id.as_deref().unwrap_or(source_key);
     let identity = ordinal.map_or_else(
         || {
-            let material = [thread_id.as_bytes(), &record_offset.to_le_bytes(), raw_line].concat();
+            let material = [
+                source_key.as_bytes(),
+                &record_offset.to_le_bytes(),
+                raw_line,
+            ]
+            .concat();
             format!("legacy:{}", hash_bytes(&material))
         },
         |ordinal| format!("ordinal:{ordinal}"),
@@ -515,8 +749,8 @@ fn finish_usage(
     UsageRecord {
         event: UsageEvent {
             id: format!(
-                "codex-v1:{}",
-                hash_bytes(format!("{thread_id}\0{identity}").as_bytes())
+                "codex-v2:{}",
+                hash_bytes(format!("{source_key}\0{identity}").as_bytes())
             ),
             source_id: String::new(),
             session_id: Some(thread_id.to_owned()),
@@ -546,6 +780,145 @@ fn finish_usage(
             normalization_notes,
         },
     }
+}
+
+fn read_first_metadata(path: &Path) -> Option<SessionMetadata> {
+    let file = File::open(path).ok()?;
+    for line in BufReader::new(file).lines() {
+        let line = line.ok()?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let envelope: RolloutEnvelope = serde_json::from_str(&line).ok()?;
+        if envelope.kind != "session_meta" {
+            return None;
+        }
+        return Some(SessionMetadata {
+            id: envelope
+                .payload
+                .id
+                .or(envelope.payload.session_id)
+                .filter(|value| !value.is_empty()),
+            timestamp: envelope.timestamp,
+            forked_from_id: envelope.payload.forked_from_id,
+            history_mode: envelope.payload.history_mode,
+            history_base: envelope.payload.history_base,
+        });
+    }
+    None
+}
+
+fn rollout_id(source_key: &str) -> Option<String> {
+    let stem = source_key.strip_suffix(".jsonl")?;
+    let rest = stem.strip_prefix("rollout-")?;
+    if rest.len() < 20 || rest.as_bytes().get(19) != Some(&b'-') {
+        return None;
+    }
+    let ids = &rest[20..];
+    let id = ids.rsplit_once('_').map_or(ids, |(_, rollout)| rollout);
+    is_uuid(id).then(|| id.to_owned())
+}
+
+fn is_uuid(value: &str) -> bool {
+    value.len() == 36
+        && value.bytes().enumerate().all(|(index, byte)| match index {
+            8 | 13 | 18 | 23 => byte == b'-',
+            _ => byte.is_ascii_hexdigit(),
+        })
+}
+
+fn read_token_signatures(path: &Path, end_timestamp: Option<&str>) -> Vec<TokenSignature> {
+    let Some(end_millis) = end_timestamp.and_then(parse_rfc3339_millis) else {
+        return Vec::new();
+    };
+    let Ok(file) = File::open(path) else {
+        return Vec::new();
+    };
+    BufReader::new(file)
+        .lines()
+        .map_while(Result::ok)
+        .filter_map(|line| serde_json::from_str::<RolloutEnvelope>(&line).ok())
+        .filter(|envelope| {
+            envelope.kind == "event_msg"
+                && envelope.payload.kind.as_deref() == Some("token_count")
+                && envelope
+                    .timestamp
+                    .as_deref()
+                    .and_then(parse_rfc3339_millis)
+                    .is_some_and(|timestamp| timestamp <= end_millis)
+        })
+        .filter_map(|envelope| {
+            envelope.payload.info.map(|info| TokenSignature {
+                timestamp: envelope.timestamp,
+                info,
+            })
+        })
+        .collect()
+}
+
+fn read_baseline_at(path: &Path, base: &HistoryBase) -> Result<Option<RawUsage>, String> {
+    let source_len = path.metadata().map_err(|error| error.to_string())?.len();
+    if base.end_byte_offset > source_len {
+        return Err(format!(
+            "parent cutoff byte {} exceeds source length {source_len}",
+            base.end_byte_offset
+        ));
+    }
+    let file = File::open(path).map_err(|error| error.to_string())?;
+    let mut reader = BufReader::new(file);
+    let mut position = 0_u64;
+    let mut baseline: Option<RawUsage> = None;
+    while position < base.end_byte_offset {
+        let mut line = String::new();
+        let read = reader
+            .read_line(&mut line)
+            .map_err(|error| error.to_string())?;
+        if read == 0 {
+            break;
+        }
+        let next = position.saturating_add(read as u64);
+        if next > base.end_byte_offset {
+            return Err(format!(
+                "parent cutoff byte {} is not a JSONL record boundary",
+                base.end_byte_offset
+            ));
+        }
+        position = next;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let envelope: RolloutEnvelope = serde_json::from_str(&line)
+            .map_err(|error| format!("parent record before cutoff is malformed: {error}"))?;
+        let ordinal = envelope
+            .ordinal
+            .ok_or_else(|| "parent record before cutoff has no ordinal".to_owned())?;
+        if ordinal >= base.end_ordinal_exclusive {
+            return Err(format!(
+                "parent ordinal {ordinal} crosses exclusive cutoff {}",
+                base.end_ordinal_exclusive
+            ));
+        }
+        if envelope.kind == "event_msg"
+            && envelope.payload.kind.as_deref() == Some("token_count")
+            && let Some(info) = envelope.payload.info
+        {
+            baseline = match info.total_token_usage {
+                Some(total) => Some(total),
+                None => info.last_token_usage.map(|last| {
+                    baseline
+                        .as_ref()
+                        .map_or_else(|| last.clone(), |total| total.saturating_add(&last))
+                }),
+            };
+        }
+    }
+    if position != base.end_byte_offset {
+        return Err(format!(
+            "parent cutoff byte {} was not reached",
+            base.end_byte_offset
+        ));
+    }
+    Ok(baseline)
 }
 
 fn decode_state(bytes: &[u8]) -> Result<ParserState, CollectorError> {
@@ -578,7 +951,7 @@ fn modified_unix_ms(metadata: &std::fs::Metadata) -> Result<i64, CollectorError>
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, io::Write};
+    use std::{fs, io::Write, path::Path};
 
     use tempfile::{NamedTempFile, TempDir};
 
@@ -787,5 +1160,335 @@ mod tests {
         assert!(batch.records.is_empty());
         assert_eq!(batch.warnings.len(), 3);
         assert!(batch.checkpoint.byte_offset.unwrap() < batch.checkpoint.source_len);
+    }
+
+    #[test]
+    fn paginated_child_starts_from_parent_cutoff_baseline() {
+        let home = TempDir::new().unwrap();
+        let directory = home.path().join("sessions/2024/01/01");
+        fs::create_dir_all(&directory).unwrap();
+        let parent_id = "01900000-0000-7000-8000-000000000001";
+        let child_rollout_id = "01900000-0000-7000-8000-000000000002";
+        let parent = directory.join(format!("rollout-2024-01-01T00-00-00-{parent_id}.jsonl"));
+        let parent_lines = vec![
+            meta("thread-lineage", "2024-01-01T00:00:00Z", None, true, None),
+            serde_json::json!({"timestamp":"2024-01-01T00:00:01Z","ordinal":1,"type":"turn_context","payload":{"model":"gpt-lineage"}}),
+            total_json(2, "2024-01-01T00:00:02Z", 100, 20),
+        ];
+        write_lines(&parent, &parent_lines);
+        let cutoff = fs::metadata(&parent).unwrap().len();
+        let archive = home.path().join("archived_sessions");
+        fs::create_dir_all(&archive).unwrap();
+        fs::rename(&parent, archive.join(parent.file_name().unwrap())).unwrap();
+        let child = directory.join(format!(
+            "rollout-2024-01-01T00-00-03-{parent_id}_{child_rollout_id}.jsonl"
+        ));
+        write_lines(
+            &child,
+            &[
+                meta(
+                    "thread-lineage",
+                    "2024-01-01T00:00:03Z",
+                    None,
+                    true,
+                    Some((parent_id, 3, cutoff)),
+                ),
+                serde_json::json!({"timestamp":"2024-01-01T00:00:04Z","ordinal":3,"type":"turn_context","payload":{"model":"gpt-lineage"}}),
+                total_json(4, "2024-01-01T00:00:05Z", 140, 30),
+            ],
+        );
+
+        let adapter = CodexJsonlAdapter::new(home.path());
+        let source = adapter
+            .discover()
+            .unwrap()
+            .into_iter()
+            .find(|candidate| candidate.path == child)
+            .unwrap();
+        let batch = adapter.ingest(&source, IngestStart::Fresh).unwrap();
+        assert!(batch.warnings.is_empty());
+        assert_eq!(batch.records.len(), 1);
+        assert_eq!(batch.records[0].event.tokens.input, 40);
+        assert_eq!(batch.records[0].event.tokens.output, 10);
+    }
+
+    #[test]
+    fn legacy_fork_suppresses_only_exact_parent_usage_prefix() {
+        let home = TempDir::new().unwrap();
+        let directory = home.path().join("sessions/2024/01/01");
+        fs::create_dir_all(&directory).unwrap();
+        let parent_id = "01900000-0000-7000-8000-000000000011";
+        let child_id = "01900000-0000-7000-8000-000000000012";
+        let inherited = total_json(2, "2024-01-01T00:00:02Z", 100, 20);
+        let parent = directory.join(format!("rollout-2024-01-01T00-00-00-{parent_id}.jsonl"));
+        write_lines(
+            &parent,
+            &[
+                meta(parent_id, "2024-01-01T00:00:00Z", None, false, None),
+                inherited.clone(),
+            ],
+        );
+        let child = directory.join(format!("rollout-2024-01-01T00-00-03-{child_id}.jsonl"));
+        write_lines(
+            &child,
+            &[
+                meta(
+                    child_id,
+                    "2024-01-01T00:00:03Z",
+                    Some(parent_id),
+                    false,
+                    None,
+                ),
+                inherited,
+                serde_json::json!({"timestamp":"2024-01-01T00:00:04Z","ordinal":3,"type":"turn_context","payload":{"model":"gpt-lineage"}}),
+                total_json(4, "2024-01-01T00:00:05Z", 130, 25),
+            ],
+        );
+
+        let adapter = CodexJsonlAdapter::new(home.path());
+        let source = adapter
+            .discover()
+            .unwrap()
+            .into_iter()
+            .find(|candidate| candidate.path == child)
+            .unwrap();
+        let batch = adapter.ingest(&source, IngestStart::Fresh).unwrap();
+        assert!(batch.warnings.is_empty());
+        assert_eq!(batch.records.len(), 1);
+        assert_eq!(batch.records[0].event.tokens.input, 30);
+        assert_eq!(batch.records[0].event.tokens.output, 5);
+    }
+
+    #[test]
+    fn legacy_replay_gate_survives_an_incomplete_tail_resume() {
+        let home = TempDir::new().unwrap();
+        let directory = home.path().join("sessions/2024/01/01");
+        fs::create_dir_all(&directory).unwrap();
+        let parent_id = "01900000-0000-7000-8000-000000000015";
+        let child_id = "01900000-0000-7000-8000-000000000016";
+        let first_inherited = total_json(2, "2024-01-01T00:00:02Z", 100, 20);
+        let second_inherited = total_json(3, "2024-01-01T00:00:03Z", 120, 25);
+        let parent = directory.join(format!("rollout-2024-01-01T00-00-00-{parent_id}.jsonl"));
+        write_lines(
+            &parent,
+            &[
+                meta(parent_id, "2024-01-01T00:00:00Z", None, false, None),
+                first_inherited.clone(),
+                second_inherited.clone(),
+            ],
+        );
+        let child = directory.join(format!("rollout-2024-01-01T00-00-04-{child_id}.jsonl"));
+        write_lines(
+            &child,
+            &[
+                meta(
+                    child_id,
+                    "2024-01-01T00:00:04Z",
+                    Some(parent_id),
+                    false,
+                    None,
+                ),
+                first_inherited,
+            ],
+        );
+        let mut child_file = fs::OpenOptions::new().append(true).open(&child).unwrap();
+        write!(child_file, "{second_inherited}").unwrap();
+        child_file.flush().unwrap();
+
+        let adapter = CodexJsonlAdapter::new(home.path());
+        let source = adapter
+            .discover()
+            .unwrap()
+            .into_iter()
+            .find(|candidate| candidate.path == child)
+            .unwrap();
+        let first = adapter.ingest(&source, IngestStart::Fresh).unwrap();
+        assert!(first.records.is_empty());
+        writeln!(child_file).unwrap();
+        writeln!(
+            child_file,
+            "{}",
+            total_json(4, "2024-01-01T00:00:05Z", 140, 30)
+        )
+        .unwrap();
+        child_file.flush().unwrap();
+
+        let resumed = adapter
+            .ingest(&source, IngestStart::Resume(&first.checkpoint))
+            .unwrap();
+        assert_eq!(resumed.mode, IngestMode::Append);
+        assert_eq!(resumed.records.len(), 1);
+        assert_eq!(resumed.records[0].event.tokens.input, 20);
+        assert_eq!(resumed.records[0].event.tokens.output, 5);
+    }
+
+    #[test]
+    fn unresolved_lineage_is_visible_and_retained_as_derived_usage() {
+        let home = TempDir::new().unwrap();
+        let directory = home.path().join("sessions/2024/01/01");
+        fs::create_dir_all(&directory).unwrap();
+        let child_id = "01900000-0000-7000-8000-000000000022";
+        let child = directory.join(format!("rollout-2024-01-01T00-00-03-{child_id}.jsonl"));
+        write_lines(
+            &child,
+            &[
+                meta(
+                    child_id,
+                    "2024-01-01T00:00:03Z",
+                    Some("01900000-0000-7000-8000-000000000021"),
+                    false,
+                    None,
+                ),
+                total_json(2, "2024-01-01T00:00:05Z", 30, 5),
+            ],
+        );
+        let adapter = CodexJsonlAdapter::new(home.path());
+        let source = adapter.discover().unwrap().pop().unwrap();
+        let batch = adapter.ingest(&source, IngestStart::Fresh).unwrap();
+        assert_eq!(batch.records.len(), 1);
+        assert_eq!(
+            batch.records[0].event.confidence,
+            agentmeter_core::DataConfidence::Derived
+        );
+        assert!(batch.warnings[0].contains("is missing"));
+    }
+
+    #[test]
+    fn paginated_lineage_cycle_is_reported() {
+        let home = TempDir::new().unwrap();
+        let directory = home.path().join("sessions/2024/01/01");
+        fs::create_dir_all(&directory).unwrap();
+        let first_id = "01900000-0000-7000-8000-000000000031";
+        let second_id = "01900000-0000-7000-8000-000000000032";
+        let first = directory.join(format!("rollout-2024-01-01T00-00-00-{first_id}.jsonl"));
+        let second = directory.join(format!(
+            "rollout-2024-01-01T00-00-01-{first_id}_{second_id}.jsonl"
+        ));
+        let mut first_len = 1;
+        let mut second_len = 1;
+        loop {
+            write_lines(
+                &first,
+                &[meta(
+                    first_id,
+                    "2024-01-01T00:00:00Z",
+                    None,
+                    true,
+                    Some((second_id, 1, second_len)),
+                )],
+            );
+            write_lines(
+                &second,
+                &[meta(
+                    first_id,
+                    "2024-01-01T00:00:01Z",
+                    None,
+                    true,
+                    Some((first_id, 1, first_len)),
+                )],
+            );
+            let next_first_len = fs::metadata(&first).unwrap().len();
+            let next_second_len = fs::metadata(&second).unwrap().len();
+            if (next_first_len, next_second_len) == (first_len, second_len) {
+                break;
+            }
+            first_len = next_first_len;
+            second_len = next_second_len;
+        }
+
+        let adapter = CodexJsonlAdapter::new(home.path());
+        let source = adapter
+            .discover()
+            .unwrap()
+            .into_iter()
+            .find(|candidate| candidate.path == second)
+            .unwrap();
+        let batch = adapter.ingest(&source, IngestStart::Fresh).unwrap();
+        assert!(batch.records.is_empty());
+        assert!(batch.warnings[0].contains("cycle"));
+    }
+
+    #[test]
+    fn rollout_identity_distinguishes_revert_branches_with_the_same_ordinal() {
+        let mut first = NamedTempFile::new().unwrap();
+        let mut second = NamedTempFile::new().unwrap();
+        for file in [&mut first, &mut second] {
+            writeln!(file, "{META}\n{TURN}").unwrap();
+            writeln!(file, "{}", token(2, 100, 50)).unwrap();
+            file.flush().unwrap();
+        }
+        let adapter = CodexJsonlAdapter::new("unused");
+        let ingest = |file: &NamedTempFile, source_key: &str| {
+            adapter
+                .ingest(
+                    &crate::SourceCandidate {
+                        path: file.path().to_owned(),
+                        kind: crate::SourceKind::AppendOnlyJsonl,
+                        source_key: source_key.to_owned(),
+                    },
+                    IngestStart::Fresh,
+                )
+                .unwrap()
+        };
+        let first_batch = ingest(&first, "rollout-branch-a.jsonl");
+        let second_batch = ingest(&second, "rollout-branch-b.jsonl");
+        assert_ne!(
+            first_batch.records[0].event.id,
+            second_batch.records[0].event.id
+        );
+    }
+
+    fn meta(
+        id: &str,
+        timestamp: &str,
+        forked_from_id: Option<&str>,
+        paginated: bool,
+        history_base: Option<(&str, u64, u64)>,
+    ) -> serde_json::Value {
+        let history_base = history_base.map(|(thread_id, ordinal, byte_offset)| {
+            serde_json::json!({
+                "thread_id": thread_id,
+                "end_ordinal_exclusive": ordinal,
+                "end_byte_offset": byte_offset
+            })
+        });
+        serde_json::json!({
+            "timestamp": timestamp,
+            "ordinal": 0,
+            "type": "session_meta",
+            "payload": {
+                "id": id,
+                "session_id": id,
+                "forked_from_id": forked_from_id,
+                "model_provider": "openai",
+                "history_mode": if paginated { "paginated" } else { "legacy" },
+                "history_base": history_base
+            }
+        })
+    }
+
+    fn total_json(ordinal: u64, timestamp: &str, input: u64, output: u64) -> serde_json::Value {
+        serde_json::json!({
+            "timestamp": timestamp,
+            "ordinal": ordinal,
+            "type": "event_msg",
+            "payload": {
+                "type": "token_count",
+                "info": {"total_token_usage": {
+                    "input_tokens": input,
+                    "output_tokens": output,
+                    "total_tokens": input + output
+                }}
+            }
+        })
+    }
+
+    fn write_lines(path: &Path, lines: &[serde_json::Value]) {
+        let contents = lines
+            .iter()
+            .map(serde_json::Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(path, format!("{contents}\n")).unwrap();
     }
 }

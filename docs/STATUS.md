@@ -34,8 +34,8 @@ This file is the durable execution ledger for the current milestone. Product and
 |---|---|---|---|---|---|---|
 | M2-01 Amp Stream JSON | coordinator | `dbbd1af` | M1 ledger | pushed | fixture tests; collector-to-storage pipeline; workspace checks | committed and pushed as `5ac3e1e` |
 | M2-02 Amp local history | coordinator | `5ac3e1e` | undocumented schema research | pushed | reconciliation fixtures; independent parser cross-check; workspace checks | committed and pushed as `fcc9481` |
-| M2-03a Codex JSONL core | coordinator | `fcc9481` | official protocol research | integrated | cumulative/incremental/archive fixtures; storage pipeline; workspace checks | all checks passed; ready to commit and push |
-| M2-03b Codex lineage | coordinator | M2-03a | official history lineage | queued | paginated/legacy fork, replay, revert and archive fixtures | not started |
+| M2-03a Codex JSONL core | coordinator | `fcc9481` | official protocol research | pushed | cumulative/incremental/archive fixtures; storage pipeline; workspace checks | committed and pushed as `cabf805` |
+| M2-03b Codex lineage | coordinator | `cabf805` | official history lineage | integrated | paginated/legacy fork, replay, revert and archive fixtures | official pointers and exact legacy prefixes reconciled; ready to commit and push |
 | M2-04 Pi | coordinator | M2-03b | upstream format research | queued | fixture and cross-check suite | not started |
 
 ## Verification contract
@@ -102,6 +102,17 @@ This file is the durable execution ledger for the current milestone. Product and
 - A final state-machine review found and fixed last-only baseline loss before submission; its regression test proves the following cumulative snapshot does not count that usage twice.
 - Official OpenAI Codex source defines the contract; Waku, Tokens/Tokscale, and ccusage were used only to cross-check normalization and cumulative behavior.
 - `git diff --check` and privacy scanning passed; the sole path match is an intentional `/fixture/home/...` synthetic path and fixtures contain no transcript-bearing fields.
+
+## M2-03b verification evidence
+
+- `cargo fmt --all --check`, `cargo check --workspace --all-targets`, and `cargo clippy --workspace --all-targets -- -D warnings`: passed.
+- `cargo test --workspace`: passed (54 tests: 47 unit tests and 7 collector-to-storage integration tests).
+- Official Codex source at commit `0acf302db5ffedea4b8ef0112f4cbcddd65cff57` defines filename-derived rollout identity, `history_base` pointer semantics, exclusive ordinal/byte cutoffs, archive lookup, and cycle handling.
+- Paginated tests cover an archived parent, inherited cumulative baseline, child-only delta emission, missing lineage, cycle diagnostics, and branch-scoped identity when revert rollouts reuse an ordinal.
+- Legacy tests require an exact parent usage prefix bounded at fork time, including checkpoint resume through an incomplete replay tail. Missing or divergent lineage remains visible and lowers retained usage confidence rather than relying on timestamp-density heuristics.
+- Collector-to-storage integration verifies that parent usage plus a paginated child's advancing cumulative total aggregates exactly once.
+- Parser version 2 invalidates only Codex source checkpoints so the corrected rollout-scoped identities and lineage baselines rebuild transactionally.
+- `git diff --check` passed. Privacy scanning found only policy examples and intentional `/fixture/home/...` synthetic paths; no secrets, real user home paths, or transcript-bearing fields were added.
 
 ## Budget ledger
 

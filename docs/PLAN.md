@@ -1,6 +1,6 @@
 # AgentMeter product and engineering plan
 
-- Status: foundation approved; implementation not started
+- Status: M2 collector implementation in progress; Amp and Codex parser milestones implemented
 - Product name: AgentMeter
 - Primary platform: macOS
 - Future platform: Windows
@@ -490,4 +490,4 @@ These decisions do not block M1 but should be settled before macOS beta:
 
 ## 19. Immediate next implementation step
 
-Complete Codex CLI cross-file lineage: resolve official `history_base`, exclude copied legacy fork history, preserve post-fork usage, and test archive/revert identity. Then assess compressed rollout and headless variants before calling the adapter supported.
+Implement the Pi adapter with the same fixture-first, incremental, provenance-preserving standard. In parallel milestone planning, assess Codex compressed rollout and headless variants before calling the Codex adapter supported; product-level source-health, i18n, and UI acceptance remain later gates.
