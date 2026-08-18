@@ -16,8 +16,8 @@ Every commit must include the corresponding update to this file: task status, de
 
 ## Operational reality
 
-- Base revision: `12f5539` (`Add portable source health snapshots`)
-- Branch: `main`, tracking GitHub `github/main`; M1 through M2-05 have been pushed
+- Base revision: `8080c26` (`Persist provider-reported cost facts`)
+- Branch: `main`, tracking GitHub `github/main`; M1 through M2-06 have been pushed
 - Additional remote: Amp-hosted `origin` remains read-only for this work
 - Amp project and `origin` still use `moeit/token-usage` pending a Puck-managed rename
 - Toolchain: Rust 1.96.0; repository checks are defined in `AGENTS.md`
@@ -42,8 +42,9 @@ Every commit must include the corresponding update to this file: task status, de
 | M2-03b Codex lineage | coordinator | `cabf805` | official history lineage | pushed | paginated/legacy fork, replay, revert and archive fixtures | committed and pushed as `5b54c3e` |
 | M2-04 Pi | coordinator | `5b54c3e` | upstream format research | pushed | fixture and cross-check suite | committed and pushed as `75ec3c7` |
 | M2-05 Source health | coordinator | `27372d3` | collector diagnostics and checkpoints | pushed | portable health-state tests; storage integration; workspace checks | committed and pushed as `12f5539` |
-| M2-06 Cost facts | coordinator | `12f5539` | canonical event-cost ingestion contract | completed | provider-cost atomicity; Pi pipeline; workspace checks | exact nano-USD facts persist atomically and Pi parser v2 emits provider-reported costs; ready to commit and push |
-| M2-07 Reconciliation report | coordinator | M2-06 commit | complete collector facts | queued | deterministic reconciliation/cross-check fixtures; workspace checks | add content-free periodic reconciliation and exportable cross-check reporting |
+| M2-06 Cost facts | coordinator | `12f5539` | canonical event-cost ingestion contract | pushed | provider-cost atomicity; Pi pipeline; workspace checks | committed and pushed as `8080c26` |
+| M2-07 Reconciliation report | coordinator | `8080c26` | complete collector facts | completed | deterministic reconciliation/cross-check fixtures; workspace checks | due-source rebuild gate and content-free versioned report verified; ready to commit and push |
+| M2-08 Variant assessment | coordinator | M2-07 commit | upstream Codex/Pi contracts | queued | official-source evidence; variant fixtures where supported; workspace checks | assess Codex compressed/headless and Pi legacy location before support claims |
 
 ## Verification contract
 
@@ -150,6 +151,16 @@ Every commit must include the corresponding update to this file: task status, de
 - Pi parser version 2 retains authoritative source totals or exactly summed component costs for assistant, compaction, and branch-summary usage. Malformed costs warn without dropping valid token facts, and copied fork costs follow the same native-lineage deduplication as usage.
 - `cargo fmt --all --check`, `cargo check --workspace --all-targets`, and `cargo clippy --workspace --all-targets -- -D warnings`: passed.
 - `cargo test --workspace`: passed (69 tests: 60 unit tests and 9 storage/pipeline integration tests), including the Pi adapter fixture and collector-to-storage cost path.
+- `git diff --check` passed; the final privacy-pattern scan found only policy examples and intentional synthetic fixture paths.
+
+## M2-07 verification evidence
+
+- Due-source selection uses the latest successful full `Replace`, so frequent incremental appends cannot postpone periodic reconciliation. Only enabled, permission-granted sources are eligible, and an exact interval boundary is due.
+- The Amp Stream pipeline proves a due source is passed through `IngestStart::Rebuild`, produces a source-owned `Replace`, preserves canonical totals, and advances the reconciliation watermark.
+- Versioned deterministic JSON reports canonical buckets, event/confidence counts, source-total coverage, and explicit match/mismatch/partial/unavailable states without paths or content-bearing identifiers and diagnostics.
+- Aggregate fixture/reference expectations are constrained to reviewed source UI/CLI, Waku, Tokens, Tokscale, ccusage, or fixture categories. Amp, Codex, and Pi storage pipelines all cross-check their expected adapter totals through the report API.
+- `cargo fmt --all --check`, `cargo check --workspace --all-targets`, and `cargo clippy --workspace --all-targets -- -D warnings`: passed after one candidate rerun fixed a test-only macro import.
+- `cargo test --workspace`: passed (71 tests: 62 unit tests and 9 storage/pipeline integration tests).
 - `git diff --check` passed; the final privacy-pattern scan found only policy examples and intentional synthetic fixture paths.
 
 ## Budget ledger

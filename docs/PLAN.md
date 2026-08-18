@@ -104,6 +104,8 @@ Start with one process and strict internal boundaries:
 - immutable UI snapshots with generation IDs;
 - periodic full reconciliation.
 
+The storage layer selects enabled, permission-granted sources due for full reconciliation from their most recent successful source replacement. Incremental appends never postpone this deadline. The process coordinator passes those sources to adapters with `IngestStart::Rebuild`; a successful `Replace` transaction advances the full-reconciliation watermark without a second scheduling table.
+
 Split out a helper process only if measured requirements show that collection must survive UI crashes or upgrades. Avoid helper signing and IPC complexity in the first release.
 
 Source health is a portable core snapshot populated by storage, not a GPUI-owned state machine. Each immutable generation contains installation/source identity, enabled and permission state, parser version, last scan/success/event, latest changed-record count, warnings, error, status, and structured remediation. States are `Healthy`, `Partial`, `SetupRequired`, `UnsupportedSchema`, `Error`, and `Disabled`. Snapshot generation is a stable fingerprint of exposed health facts so asynchronous consumers can reject stale responses without a schema-only revision counter. Local paths may be shown in the Sources UI but must be redacted before diagnostics export.
@@ -135,6 +137,8 @@ Each collector adapter must provide:
 8. Notify the UI with a new snapshot generation.
 
 Filesystem watcher events are invalidation hints, not truth. Queue overflow, truncation, source movement, and application startup trigger reconciliation.
+
+Reconciliation exports are versioned, deterministic JSON snapshots. They contain adapter/source identity, parser version, aggregate canonical token buckets, confidence counts, source-total coverage and mismatch state, plus reviewed aggregate expectations from source UIs/CLIs or named reference parsers. They must not contain paths, model/session/event IDs, warnings, provenance notes, or source excerpts.
 
 ### Token normalization
 
@@ -494,4 +498,4 @@ These decisions do not block M1 but should be settled before macOS beta:
 
 ## 19. Immediate next implementation step
 
-Add deterministic periodic reconciliation and an exportable cross-check report for the implemented Amp, Codex, and Pi adapters. The report must compare canonical totals with source/reference totals without exporting content. Codex compressed/headless variants and Pi's retained legacy location must still be assessed before either adapter is called supported.
+Assess Codex compressed/headless variants and Pi's retained legacy one-directory location against current upstream contracts. Add only evidence-backed discovery/parser coverage, document unsupported variants explicitly, and do not call either adapter supported before the remaining UI acceptance gates exist.

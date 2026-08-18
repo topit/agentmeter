@@ -1,7 +1,10 @@
 use std::fs;
 
 use agentmeter_collectors::{CollectorAdapter, IngestStart, pi::PiJsonlAdapter};
-use agentmeter_storage::{Database, IngestRequest, SourceRegistration, WriteMode};
+use agentmeter_storage::{
+    CrossCheckStatus, Database, IngestRequest, ReferenceExpectation, ReferenceKind,
+    SourceRegistration, SourceReportedStatus, WriteMode,
+};
 use tempfile::TempDir;
 
 #[test]
@@ -88,6 +91,23 @@ fn pi_fork_and_summary_usage_flow_into_the_ledger_once() {
     let summaries = daily.iter().find(|row| row.model == "unknown").unwrap();
     assert_eq!(summaries.tokens.input, 20);
     assert_eq!(summaries.tokens.output, 5);
+    let report = database
+        .reconciliation_report(
+            1_704_067_300_000,
+            &[ReferenceExpectation {
+                adapter_id: adapter.id().into(),
+                reference: ReferenceKind::Fixture,
+                expected_total_tokens: 180,
+            }],
+        )
+        .unwrap();
+    assert!(
+        report
+            .sources
+            .iter()
+            .all(|source| source.source_reported.status == SourceReportedStatus::Match)
+    );
+    assert_eq!(report.reference_checks[0].status, CrossCheckStatus::Match);
 }
 
 fn header(id: &str, parent_session: Option<&str>) -> serde_json::Value {

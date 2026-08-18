@@ -2,6 +2,13 @@
 
 AgentMeter distinguishes implemented parsers from product-level support. A source is **supported** only after it satisfies the discovery, fixture, reconciliation, diagnostics, cross-check, i18n, and UI criteria in [`PLAN.md`](PLAN.md#definition-of-supported).
 
+## Periodic reconciliation and cross-checks
+
+- Enabled sources with granted permission become due according to their latest successful full `Replace`; ordinary incremental appends do not reset that clock. Due append-only sources are reopened with `IngestStart::Rebuild`, and their canonical events, provenance, costs, and checkpoint are replaced atomically.
+- The versioned reconciliation JSON reports canonical token buckets and confidence counts per source. Source-native totals are compared only across events that supplied them, with explicit match, mismatch, partial, and unavailable states.
+- Reviewed aggregate expectations can be labeled only as source UI/CLI, Waku, Tokens, Tokscale, ccusage, or synthetic fixture evidence. Checks are sorted deterministically by adapter and reference kind.
+- Export deliberately excludes filesystem paths, models, session/event IDs, warnings, normalization notes, and source excerpts. Amp, Codex, and Pi pipeline fixtures verify their adapter totals through this same report path.
+
 | Source path | Contract | Status | Limitations |
 |---|---|---|---|
 | Amp `--stream-json` capture | [Official Amp Streaming JSON documentation](https://ampcode.com/news/streaming-json) | parser implemented; not yet product-supported | opt-in capture only; the documented stream omits event timestamps, model IDs, and stable per-event IDs |

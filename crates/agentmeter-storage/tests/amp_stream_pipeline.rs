@@ -5,7 +5,8 @@ use agentmeter_collectors::{
     amp::AmpStreamJsonAdapter,
 };
 use agentmeter_storage::{
-    CheckpointStatus, Database, IngestRequest, SourceRegistration, WriteMode,
+    CheckpointStatus, CrossCheckStatus, Database, IngestRequest, ReferenceExpectation,
+    ReferenceKind, SourceRegistration, SourceReportedStatus, WriteMode,
 };
 use tempfile::NamedTempFile;
 
@@ -59,6 +60,25 @@ fn amp_stream_appends_into_the_canonical_ledger() {
         .apply_ingest(request(appended, adapter.parser_version()))
         .unwrap();
 
+    assert_eq!(
+        database
+            .sources_due_for_reconciliation(1_704_067_200_000, 86_400_000)
+            .unwrap()
+            .len(),
+        1
+    );
+    let rebuilt = adapter.ingest(&source, IngestStart::Rebuild).unwrap();
+    assert_eq!(rebuilt.mode, IngestMode::Replace);
+    database
+        .apply_ingest(request(rebuilt, adapter.parser_version()))
+        .unwrap();
+    assert!(
+        database
+            .sources_due_for_reconciliation(1_704_153_599_999, 86_400_000)
+            .unwrap()
+            .is_empty()
+    );
+
     assert_eq!(database.event_count(SOURCE_ID).unwrap(), 2);
     let daily = database.daily_usage_utc().unwrap();
     assert_eq!(daily.len(), 1);
@@ -66,6 +86,21 @@ fn amp_stream_appends_into_the_canonical_ledger() {
     assert_eq!(daily[0].model, "unknown");
     assert_eq!(daily[0].tokens.input, 30);
     assert_eq!(daily[0].tokens.output, 6);
+    let report = database
+        .reconciliation_report(
+            1_704_067_300_000,
+            &[ReferenceExpectation {
+                adapter_id: adapter.id().into(),
+                reference: ReferenceKind::Fixture,
+                expected_total_tokens: 36,
+            }],
+        )
+        .unwrap();
+    assert_eq!(
+        report.sources[0].source_reported.status,
+        SourceReportedStatus::Unavailable
+    );
+    assert_eq!(report.reference_checks[0].status, CrossCheckStatus::Match);
 }
 
 fn write_assistant(file: &mut NamedTempFile, input: u64, output: u64) {

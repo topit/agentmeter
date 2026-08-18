@@ -5,7 +5,8 @@ use agentmeter_collectors::{
     SourceKind, codex::CodexJsonlAdapter,
 };
 use agentmeter_storage::{
-    CheckpointStatus, Database, IngestRequest, SourceRegistration, WriteMode,
+    CheckpointStatus, CrossCheckStatus, Database, IngestRequest, ReferenceExpectation,
+    ReferenceKind, SourceRegistration, SourceReportedStatus, WriteMode,
 };
 use tempfile::{NamedTempFile, TempDir};
 
@@ -72,6 +73,21 @@ fn codex_cumulative_state_resumes_into_the_canonical_ledger() {
     assert_eq!(daily[0].model, "gpt-synthetic");
     assert_eq!(daily[0].tokens.input, 160);
     assert_eq!(daily[0].tokens.output, 35);
+    let report = database
+        .reconciliation_report(
+            1_704_067_300_000,
+            &[ReferenceExpectation {
+                adapter_id: adapter.id().into(),
+                reference: ReferenceKind::Fixture,
+                expected_total_tokens: 195,
+            }],
+        )
+        .unwrap();
+    assert_eq!(
+        report.sources[0].source_reported.status,
+        SourceReportedStatus::Match
+    );
+    assert_eq!(report.reference_checks[0].status, CrossCheckStatus::Match);
 }
 
 #[test]

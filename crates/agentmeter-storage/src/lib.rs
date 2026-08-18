@@ -1,6 +1,6 @@
 //! Durable local storage for AgentMeter events.
 
-use std::path::Path;
+use std::{collections::BTreeMap, path::Path};
 
 use agentmeter_core::{
     CostFact, CostKind, DataConfidence, NanoUsd, SourceHealth, SourceHealthSnapshot,
@@ -167,6 +167,8 @@ pub enum StorageError {
     },
     #[error("{field} value does not fit SQLite INTEGER")]
     IntegerOutOfRange { field: &'static str },
+    #[error("token totals overflowed while building a reconciliation report")]
+    ReconciliationOverflow,
     #[error("failed to serialize diagnostics: {0}")]
     Diagnostics(#[from] serde_json::Error),
 }
@@ -554,6 +556,213 @@ impl Database {
         .collect()
     }
 
+    /// Sources whose most recent successful full replacement is older than
+    /// the requested interval. Incremental appends do not postpone this gate.
+    pub fn sources_due_for_reconciliation(
+        &self,
+        now_unix_ms: i64,
+        interval_ms: u64,
+    ) -> Result<Vec<ReconciliationTarget>> {
+        let interval_ms = to_sql_integer(interval_ms, "reconciliation_interval_ms")?;
+        let due_before = now_unix_ms.saturating_sub(interval_ms);
+        let mut statement = self.connection.prepare(
+            "SELECT s.id, i.adapter_id, s.parser_version, r.last_reconciled_unix_ms
+             FROM source_objects AS s
+             JOIN source_installations AS i ON i.id = s.installation_id
+             LEFT JOIN (
+                 SELECT source_object_id, MAX(finished_at_unix_ms) AS last_reconciled_unix_ms
+                 FROM ingest_runs
+                 WHERE status = 'completed' AND mode = 'replace'
+                 GROUP BY source_object_id
+             ) AS r ON r.source_object_id = s.id
+             WHERE i.enabled = 1 AND i.permission_state = 'granted'
+               AND (r.last_reconciled_unix_ms IS NULL OR r.last_reconciled_unix_ms <= ?1)
+             ORDER BY i.adapter_id, s.id",
+        )?;
+        let rows = statement.query_map(params![due_before], |row| {
+            Ok(ReconciliationTarget {
+                source_object_id: row.get(0)?,
+                adapter_id: row.get(1)?,
+                parser_version: row.get(2)?,
+                last_reconciled_unix_ms: row.get(3)?,
+            })
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    /// Builds a deterministic, content-free cross-check report. Callers pass
+    /// only reviewed aggregate totals from source UIs/CLIs or reference
+    /// parsers; arbitrary labels and source excerpts cannot enter the export.
+    pub fn reconciliation_report(
+        &self,
+        generated_at_unix_ms: i64,
+        expectations: &[ReferenceExpectation],
+    ) -> Result<ReconciliationReport> {
+        let mut statement = self.connection.prepare(
+            "SELECT s.id, i.adapter_id, s.parser_version, s.last_success_unix_ms
+             FROM source_objects AS s
+             JOIN source_installations AS i ON i.id = s.installation_id
+             ORDER BY i.adapter_id, s.id",
+        )?;
+        let source_rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, u32>(2)?,
+                row.get::<_, Option<i64>>(3)?,
+            ))
+        })?;
+        let mut sources = Vec::new();
+        let mut adapter_totals = BTreeMap::<String, ReconciliationTokenTotals>::new();
+        for source in source_rows {
+            let (source_object_id, adapter_id, parser_version, last_success_unix_ms) = source?;
+            let source_report = self.source_reconciliation(
+                source_object_id,
+                adapter_id.clone(),
+                parser_version,
+                last_success_unix_ms,
+            )?;
+            adapter_totals
+                .entry(adapter_id)
+                .or_default()
+                .checked_add_assign(source_report.canonical_tokens)?;
+            sources.push(source_report);
+        }
+
+        let mut expectations = expectations.to_vec();
+        expectations.sort_by(|left, right| {
+            (&left.adapter_id, left.reference).cmp(&(&right.adapter_id, right.reference))
+        });
+        let reference_checks = expectations
+            .into_iter()
+            .map(|expectation| {
+                let actual_total_tokens = adapter_totals
+                    .get(&expectation.adapter_id)
+                    .map(ReconciliationTokenTotals::checked_total)
+                    .transpose()?;
+                let status = match actual_total_tokens {
+                    None => CrossCheckStatus::Unavailable,
+                    Some(actual) if actual == expectation.expected_total_tokens => {
+                        CrossCheckStatus::Match
+                    }
+                    Some(_) => CrossCheckStatus::Mismatch,
+                };
+                Ok(ReferenceCrossCheck {
+                    adapter_id: expectation.adapter_id,
+                    reference: expectation.reference,
+                    expected_total_tokens: expectation.expected_total_tokens,
+                    actual_total_tokens,
+                    status,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(ReconciliationReport {
+            format_version: 1,
+            generated_at_unix_ms,
+            sources,
+            reference_checks,
+        })
+    }
+
+    fn source_reconciliation(
+        &self,
+        source_object_id: String,
+        adapter_id: String,
+        parser_version: u32,
+        last_success_unix_ms: Option<i64>,
+    ) -> Result<SourceReconciliation> {
+        let mut statement = self.connection.prepare(
+            "SELECT input_tokens, output_tokens, cache_read_tokens,
+                    cache_write_tokens, reasoning_tokens, source_reported_total,
+                    confidence
+             FROM usage_events WHERE source_object_id = ?1 ORDER BY event_id",
+        )?;
+        let rows = statement.query_map(params![source_object_id], |row| {
+            Ok((
+                ReconciliationTokenTotals {
+                    input: row.get::<_, i64>(0)? as u64,
+                    output: row.get::<_, i64>(1)? as u64,
+                    cache_read: row.get::<_, i64>(2)? as u64,
+                    cache_write: row.get::<_, i64>(3)? as u64,
+                    reasoning: row.get::<_, i64>(4)? as u64,
+                },
+                row.get::<_, Option<i64>>(5)?.map(|value| value as u64),
+                row.get::<_, String>(6)?,
+            ))
+        })?;
+        let mut canonical_tokens = ReconciliationTokenTotals::default();
+        let mut reported_canonical_total = 0_u64;
+        let mut source_reported_total = 0_u64;
+        let mut event_count = 0_u64;
+        let mut reported_event_count = 0_u64;
+        let mut derived_event_count = 0_u64;
+        let mut estimated_event_count = 0_u64;
+        for row in rows {
+            let (tokens, source_total, confidence) = row?;
+            canonical_tokens.checked_add_assign(tokens)?;
+            event_count = event_count
+                .checked_add(1)
+                .ok_or(StorageError::ReconciliationOverflow)?;
+            match confidence.as_str() {
+                "derived" => {
+                    derived_event_count = derived_event_count
+                        .checked_add(1)
+                        .ok_or(StorageError::ReconciliationOverflow)?;
+                }
+                "estimated" => {
+                    estimated_event_count = estimated_event_count
+                        .checked_add(1)
+                        .ok_or(StorageError::ReconciliationOverflow)?;
+                }
+                _ => {}
+            }
+            if let Some(source_total) = source_total {
+                reported_event_count = reported_event_count
+                    .checked_add(1)
+                    .ok_or(StorageError::ReconciliationOverflow)?;
+                reported_canonical_total = reported_canonical_total
+                    .checked_add(tokens.checked_total()?)
+                    .ok_or(StorageError::ReconciliationOverflow)?;
+                source_reported_total = source_reported_total
+                    .checked_add(source_total)
+                    .ok_or(StorageError::ReconciliationOverflow)?;
+            }
+        }
+        let source_reported_status = if reported_event_count == 0 {
+            SourceReportedStatus::Unavailable
+        } else {
+            match (
+                reported_event_count == event_count,
+                reported_canonical_total == source_reported_total,
+            ) {
+                (true, true) => SourceReportedStatus::Match,
+                (true, false) => SourceReportedStatus::Mismatch,
+                (false, true) => SourceReportedStatus::PartialMatch,
+                (false, false) => SourceReportedStatus::PartialMismatch,
+            }
+        };
+        Ok(SourceReconciliation {
+            source_object_id,
+            adapter_id,
+            parser_version,
+            last_success_unix_ms,
+            event_count,
+            canonical_tokens,
+            derived_event_count,
+            estimated_event_count,
+            source_reported: SourceReportedCrossCheck {
+                status: source_reported_status,
+                checked_event_count: reported_event_count,
+                missing_event_count: event_count - reported_event_count,
+                canonical_total_tokens: (reported_event_count != 0)
+                    .then_some(reported_canonical_total),
+                source_total_tokens: (reported_event_count != 0).then_some(source_reported_total),
+            },
+        })
+    }
+
     pub fn daily_usage_utc(&self) -> Result<Vec<DailyUsage>> {
         let mut statement = self.connection.prepare(
             "SELECT day, client, provider, model,
@@ -854,6 +1063,144 @@ pub struct IngestReport {
 }
 
 impl IngestReport {
+    pub fn to_json_pretty(&self) -> Result<String> {
+        Ok(serde_json::to_string_pretty(self)?)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReconciliationTarget {
+    pub source_object_id: String,
+    pub adapter_id: String,
+    pub parser_version: u32,
+    pub last_reconciled_unix_ms: Option<i64>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReferenceKind {
+    SourceUi,
+    SourceCli,
+    Waku,
+    Tokens,
+    Tokscale,
+    Ccusage,
+    Fixture,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReferenceExpectation {
+    pub adapter_id: String,
+    pub reference: ReferenceKind,
+    pub expected_total_tokens: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CrossCheckStatus {
+    Match,
+    Mismatch,
+    Unavailable,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceReportedStatus {
+    Match,
+    Mismatch,
+    PartialMatch,
+    PartialMismatch,
+    Unavailable,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct ReconciliationTokenTotals {
+    pub input: u64,
+    pub output: u64,
+    pub cache_read: u64,
+    pub cache_write: u64,
+    pub reasoning: u64,
+}
+
+impl ReconciliationTokenTotals {
+    pub fn checked_total(&self) -> Result<u64> {
+        [
+            self.input,
+            self.output,
+            self.cache_read,
+            self.cache_write,
+            self.reasoning,
+        ]
+        .into_iter()
+        .try_fold(0_u64, u64::checked_add)
+        .ok_or(StorageError::ReconciliationOverflow)
+    }
+
+    fn checked_add_assign(&mut self, other: Self) -> Result<()> {
+        self.input = self
+            .input
+            .checked_add(other.input)
+            .ok_or(StorageError::ReconciliationOverflow)?;
+        self.output = self
+            .output
+            .checked_add(other.output)
+            .ok_or(StorageError::ReconciliationOverflow)?;
+        self.cache_read = self
+            .cache_read
+            .checked_add(other.cache_read)
+            .ok_or(StorageError::ReconciliationOverflow)?;
+        self.cache_write = self
+            .cache_write
+            .checked_add(other.cache_write)
+            .ok_or(StorageError::ReconciliationOverflow)?;
+        self.reasoning = self
+            .reasoning
+            .checked_add(other.reasoning)
+            .ok_or(StorageError::ReconciliationOverflow)?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct SourceReportedCrossCheck {
+    pub status: SourceReportedStatus,
+    pub checked_event_count: u64,
+    pub missing_event_count: u64,
+    pub canonical_total_tokens: Option<u64>,
+    pub source_total_tokens: Option<u64>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct SourceReconciliation {
+    pub source_object_id: String,
+    pub adapter_id: String,
+    pub parser_version: u32,
+    pub last_success_unix_ms: Option<i64>,
+    pub event_count: u64,
+    pub canonical_tokens: ReconciliationTokenTotals,
+    pub derived_event_count: u64,
+    pub estimated_event_count: u64,
+    pub source_reported: SourceReportedCrossCheck,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ReferenceCrossCheck {
+    pub adapter_id: String,
+    pub reference: ReferenceKind,
+    pub expected_total_tokens: u64,
+    pub actual_total_tokens: Option<u64>,
+    pub status: CrossCheckStatus,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ReconciliationReport {
+    pub format_version: u32,
+    pub generated_at_unix_ms: i64,
+    pub sources: Vec<SourceReconciliation>,
+    pub reference_checks: Vec<ReferenceCrossCheck>,
+}
+
+impl ReconciliationReport {
     pub fn to_json_pretty(&self) -> Result<String> {
         Ok(serde_json::to_string_pretty(self)?)
     }
@@ -1320,11 +1667,13 @@ mod tests {
         CostFact, CostKind, DataConfidence, EventProvenance, NanoUsd, TimestampOrigin,
         TokenBreakdown, UsageEvent, UsageRecord,
     };
+    use rusqlite::params;
     use tempfile::tempdir;
 
     use super::{
-        CheckpointStatus, Database, IngestRequest, SCHEMA_VERSION, SourceRegistration,
-        StorageError, WriteMode,
+        CheckpointStatus, CrossCheckStatus, Database, IngestRequest, ReferenceExpectation,
+        ReferenceKind, SCHEMA_VERSION, SourceRegistration, SourceReportedStatus, StorageError,
+        WriteMode,
     };
 
     const SOURCE_ID: &str = "source-synthetic-001";
@@ -1569,6 +1918,132 @@ mod tests {
         database.rebuild_daily_usage().unwrap();
 
         assert_eq!(database.daily_usage_utc().unwrap(), expected);
+    }
+
+    #[test]
+    fn periodic_reconciliation_is_not_postponed_by_incremental_appends() {
+        let mut database = registered_database();
+        let due = database
+            .sources_due_for_reconciliation(1_000, 1_000)
+            .unwrap();
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].last_reconciled_unix_ms, None);
+
+        let mut append = ingest_request(WriteMode::Append, vec![record("event-append", 1_000, 10)]);
+        append.observed_at_unix_ms = 1_000;
+        database.apply_ingest(append).unwrap();
+        assert_eq!(
+            database
+                .sources_due_for_reconciliation(1_500, 1_000)
+                .unwrap()
+                .len(),
+            1
+        );
+
+        let mut rebuild =
+            ingest_request(WriteMode::Replace, vec![record("event-append", 1_000, 10)]);
+        rebuild.observed_at_unix_ms = 2_000;
+        database.apply_ingest(rebuild).unwrap();
+        assert!(
+            database
+                .sources_due_for_reconciliation(2_999, 1_000)
+                .unwrap()
+                .is_empty()
+        );
+        let due = database
+            .sources_due_for_reconciliation(3_000, 1_000)
+            .unwrap();
+        assert_eq!(due[0].last_reconciled_unix_ms, Some(2_000));
+        database
+            .connection
+            .execute(
+                "UPDATE source_installations SET enabled = 0 WHERE id = ?1",
+                params!["installation-synthetic-001"],
+            )
+            .unwrap();
+        assert!(
+            database
+                .sources_due_for_reconciliation(3_000, 1_000)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn reconciliation_report_cross_checks_without_exporting_content_fields() {
+        let mut database = registered_database();
+        let matching = record("event-match", 1_704_067_200_000, 10);
+        let mut mismatching = record("event-mismatch", 1_704_067_201_000, 20);
+        mismatching.event.source_reported_total = Some(23);
+        mismatching.event.confidence = DataConfidence::Derived;
+        let mut missing = record("event-missing", 1_704_067_202_000, 30);
+        missing.event.source_reported_total = None;
+        database
+            .apply_ingest(ingest_request(
+                WriteMode::Append,
+                vec![matching, mismatching, missing],
+            ))
+            .unwrap();
+
+        let report = database
+            .reconciliation_report(
+                1_704_067_300_000,
+                &[
+                    ReferenceExpectation {
+                        adapter_id: "reference-jsonl".into(),
+                        reference: ReferenceKind::Fixture,
+                        expected_total_tokens: 66,
+                    },
+                    ReferenceExpectation {
+                        adapter_id: "reference-jsonl".into(),
+                        reference: ReferenceKind::Tokens,
+                        expected_total_tokens: 67,
+                    },
+                    ReferenceExpectation {
+                        adapter_id: "missing-adapter".into(),
+                        reference: ReferenceKind::SourceCli,
+                        expected_total_tokens: 1,
+                    },
+                ],
+            )
+            .unwrap();
+
+        assert_eq!(report.sources.len(), 1);
+        let source = &report.sources[0];
+        assert_eq!(source.event_count, 3);
+        assert_eq!(source.canonical_tokens.checked_total().unwrap(), 66);
+        assert_eq!(source.derived_event_count, 1);
+        assert_eq!(
+            source.source_reported.status,
+            SourceReportedStatus::PartialMismatch
+        );
+        assert_eq!(source.source_reported.checked_event_count, 2);
+        assert_eq!(source.source_reported.missing_event_count, 1);
+        assert_eq!(source.source_reported.canonical_total_tokens, Some(34));
+        assert_eq!(source.source_reported.source_total_tokens, Some(35));
+        assert!(report.reference_checks.iter().any(|check| {
+            check.reference == ReferenceKind::Fixture && check.status == CrossCheckStatus::Match
+        }));
+        assert!(report.reference_checks.iter().any(|check| {
+            check.reference == ReferenceKind::Tokens && check.status == CrossCheckStatus::Mismatch
+        }));
+        assert!(report.reference_checks.iter().any(|check| {
+            check.adapter_id == "missing-adapter" && check.status == CrossCheckStatus::Unavailable
+        }));
+
+        let json = report.to_json_pretty().unwrap();
+        for forbidden in [
+            "root_path",
+            "native_path",
+            "event_id",
+            "session_id",
+            "model",
+            "warnings",
+            "normalization_notes",
+        ] {
+            assert!(!json.contains(forbidden), "report leaked {forbidden}");
+        }
+        assert!(json.contains("\"status\": \"partial_mismatch\""));
     }
 
     fn registered_database() -> Database {
