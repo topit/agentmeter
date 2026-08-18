@@ -499,4 +499,4 @@ These decisions do not block M1 but should be settled before macOS beta:
 
 ## 19. Immediate next implementation step
 
-Build the Sources view from immutable source-health snapshots, with localized status, remediation, empty, loading, and error states and no filesystem work on the render path. Native Overview and shell acceptance remain required before M3 exits; rerun the full locale/theme matrix after the macOS runner has a working Metal Toolchain.
+Continue from the handoff in `docs/STATUS.md`: build M3-04 Sources presentation from immutable source-health snapshots, including localized status, remediation, loading, empty, and error states with stale-result rejection and no filesystem work on the render path. Native Overview and shell acceptance remain required before M3 exits; rerun the full locale/theme matrix after the macOS runner has a working Metal Toolchain.
