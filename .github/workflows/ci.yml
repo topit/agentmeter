@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  portable-checks:
+    name: Portable checks (Linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - name: Formatting
+        run: cargo fmt --all --check
+      - name: Type checking
+        run: cargo check --workspace --all-targets
+      - name: Tests
+        run: cargo test --workspace
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  macos-native:
+    name: macOS production build and visual matrix
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - name: Verify the Metal Toolchain is available
+        run: xcrun metal --version
+      - name: Workspace checks with production features
+        run: |
+          cargo fmt --all --check
+          cargo check --workspace --all-targets
+          cargo test --workspace
+          cargo clippy --workspace --all-targets -- -D warnings
+      - name: Build the desktop app
+        run: cargo build -p agentmeter-desktop
+      - name: Capture the locale and theme matrix
+        run: |
+          set -euo pipefail
+          mkdir -p screenshots
+          BIN="target/debug/agentmeter-desktop"
+
+          capture() {
+            local name="$1" lang="$2" route="$3"
+            LANG="$lang" AGENTMETER_INITIAL_ROUTE="$route" "$BIN" &
+            local pid=$!
+            sleep 8
+            screencapture -x "screenshots/${name}.png"
+            kill "$pid" 2>/dev/null || true
+            wait "$pid" 2>/dev/null || true
+            sleep 1
+          }
+
+          for route in overview sources settings; do
+            capture "${route}-en-light" "en_US.UTF-8" "$route"
+          done
+          capture "overview-zh-light" "zh_CN.UTF-8" overview
+          capture "sources-zh-light" "zh_CN.UTF-8" sources
+          capture "settings-zh-light" "zh_CN.UTF-8" settings
+
+          defaults write -g AppleInterfaceStyle -string Dark
+          for route in overview sources settings; do
+            capture "${route}-en-dark" "en_US.UTF-8" "$route"
+          done
+          capture "overview-zh-dark" "zh_CN.UTF-8" overview
+          capture "sources-zh-dark" "zh_CN.UTF-8" sources
+          capture "settings-zh-dark" "zh_CN.UTF-8" settings
+          defaults delete -g AppleInterfaceStyle 2>/dev/null || true
+      - name: Upload the visual matrix
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-matrix-${{ github.sha }}
+          path: screenshots/

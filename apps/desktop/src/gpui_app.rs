@@ -47,11 +47,18 @@ struct NavigationShell {
 impl NavigationShell {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let locale = Locale::from_language_tag(std::env::var("LANG").as_deref().unwrap_or("en"));
-        let state = ShellState::new(
+        let mut state = ShellState::new(
             locale,
             ThemeMode::System,
             appearance_is_dark(window.appearance()),
         );
+        if let Some(route) = std::env::var("AGENTMETER_INITIAL_ROUTE")
+            .ok()
+            .as_deref()
+            .and_then(Route::from_name)
+        {
+            state.select(route);
+        }
         cx.observe_window_appearance(window, |this, window, cx| {
             this.state
                 .set_system_is_dark(appearance_is_dark(window.appearance()));

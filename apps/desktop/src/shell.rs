@@ -42,6 +42,21 @@ impl Route {
             Self::Settings => "nav-settings",
         }
     }
+
+    /// Automation hook for headless validation: maps a route name from the
+    /// `AGENTMETER_INITIAL_ROUTE` environment variable so continuous
+    /// integration can capture every view. Unknown values keep the default.
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "overview" => Some(Self::Overview),
+            "sessions" => Some(Self::Sessions),
+            "sources" => Some(Self::Sources),
+            "models" => Some(Self::Models),
+            "pricing" => Some(Self::Pricing),
+            "settings" => Some(Self::Settings),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -137,5 +152,17 @@ mod tests {
         shell.set_theme_mode(ThemeMode::Light);
         assert_eq!(shell.selected_route(), Route::Sources);
         assert_eq!(shell.resolved_theme(), ResolvedTheme::Light);
+    }
+
+    #[test]
+    fn parses_automation_route_names_and_rejects_unknown_values() {
+        assert_eq!(Route::from_name("sources"), Some(Route::Sources));
+        assert_eq!(Route::from_name(" Settings "), Some(Route::Settings));
+        assert_eq!(Route::from_name("OVERVIEW"), Some(Route::Overview));
+        assert_eq!(Route::from_name("sessions"), Some(Route::Sessions));
+        assert_eq!(Route::from_name("models"), Some(Route::Models));
+        assert_eq!(Route::from_name("pricing"), Some(Route::Pricing));
+        assert_eq!(Route::from_name("klingon"), None);
+        assert_eq!(Route::from_name(""), None);
     }
 }
