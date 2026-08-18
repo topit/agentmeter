@@ -498,4 +498,4 @@ These decisions do not block M1 but should be settled before macOS beta:
 
 ## 19. Immediate next implementation step
 
-Begin M3 by selecting and pinning a tested GPUI revision, then land the first macOS window and navigation shell without moving collection or storage work onto the render path. The first UI commit must preserve the existing English/Chinese and System/Light/Dark contracts and establish a portable presentation boundary before overview data is connected.
+Validate the pinned GPUI navigation shell on macOS, including launch, navigation, keyboard focus, English/Chinese text, and system/light/dark rendering. Then connect the first immutable overview query snapshot with generation-based stale-result rejection, keeping SQLite work off the render path.

@@ -32,6 +32,9 @@ impl ResolvedTheme {
                 muted_text: 0x6f737b,
                 border: 0xdfe1e5,
                 accent: 0x1677d2,
+                accent_text: 0xffffff,
+                hover: 0xebf3fb,
+                focus_ring: 0x0b6fc2,
             },
             Self::Dark => ThemePalette {
                 background: 0x151617,
@@ -40,6 +43,9 @@ impl ResolvedTheme {
                 muted_text: 0xa7abb3,
                 border: 0x34363a,
                 accent: 0x57a8f5,
+                accent_text: 0x0d2235,
+                hover: 0x293847,
+                focus_ring: 0x86c5ff,
             },
         }
     }
@@ -55,6 +61,9 @@ pub struct ThemePalette {
     pub muted_text: u32,
     pub border: u32,
     pub accent: u32,
+    pub accent_text: u32,
+    pub hover: u32,
+    pub focus_ring: u32,
 }
 
 #[cfg(test)]

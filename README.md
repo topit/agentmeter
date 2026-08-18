@@ -31,7 +31,7 @@ crates/agentmeter-storage      SQLite event ledger and aggregate queries
 crates/agentmeter-pricing      reported and estimated cost provenance
 ```
 
-The GPUI dependency will be pinned when the first real window is implemented. Keeping it out of this foundation commit avoids selecting an unverified moving revision before there is UI code that can test it.
+The macOS application pins GPUI to Zed revision `c24358d96cdb4ce14ecbc088462295353b0103f0`. GPUI remains isolated to the macOS target; portable navigation, localization, and theme state can be tested on other platforms without pulling presentation concerns into the core crates.
 
 See the [complete product and engineering plan](docs/PLAN.md), [source support status](docs/SOURCES.md), [current implementation status](docs/STATUS.md), and [fixture privacy policy](docs/FIXTURES.md).
 
@@ -46,7 +46,7 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-Run the current foundation executable:
+On macOS, run the current GPUI navigation shell with `cargo run -p agentmeter-desktop`. Other platforms retain a small console fallback for portable contract checks:
 
 ```sh
 cargo run -p agentmeter-desktop

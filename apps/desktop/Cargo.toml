@@ -7,5 +7,9 @@ rust-version.workspace = true
 [dependencies]
 agentmeter-core = { path = "../../crates/agentmeter-core" }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+gpui = { git = "https://github.com/zed-industries/zed", rev = "c24358d96cdb4ce14ecbc088462295353b0103f0" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "c24358d96cdb4ce14ecbc088462295353b0103f0", features = ["font-kit"] }
+
 [lints]
 workspace = true

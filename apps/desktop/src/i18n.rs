@@ -20,6 +20,9 @@ impl Locale {
     pub fn text(self, key: MessageKey) -> &'static str {
         match (self, key) {
             (Self::En, MessageKey::AppSubtitle) => "Local agent usage",
+            (Self::En, MessageKey::ShellPlaceholder) => {
+                "Usage views will appear here as local snapshots become available."
+            }
             (Self::En, MessageKey::Overview) => "Overview",
             (Self::En, MessageKey::Sessions) => "Sessions",
             (Self::En, MessageKey::Sources) => "Sources",
@@ -44,6 +47,9 @@ impl Locale {
             (Self::En, MessageKey::RemediationRetryCollection) => "Retry collection.",
             (Self::En, MessageKey::RemediationReviewWarnings) => "Review the collection warnings.",
             (Self::ZhCn, MessageKey::AppSubtitle) => "本地 Agent 用量",
+            (Self::ZhCn, MessageKey::ShellPlaceholder) => {
+                "本地数据快照可用后，用量视图将在这里显示。"
+            }
             (Self::ZhCn, MessageKey::Overview) => "概览",
             (Self::ZhCn, MessageKey::Sessions) => "会话",
             (Self::ZhCn, MessageKey::Sources) => "数据源",
@@ -72,6 +78,7 @@ impl Locale {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MessageKey {
     AppSubtitle,
+    ShellPlaceholder,
     Overview,
     Sessions,
     Sources,

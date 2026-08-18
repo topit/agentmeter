@@ -16,8 +16,8 @@ Every commit must include the corresponding update to this file: task status, de
 
 ## Operational reality
 
-- Base revision: `e5d77ee` (`Add periodic reconciliation reports`)
-- Branch: `main`, tracking GitHub `github/main`; M1 through M2-07 have been pushed
+- Base revision: `eb161d5` (`Support Codex compressed rollouts`)
+- Branch: `main`, tracking GitHub `github/main`; M1 and M2 have been pushed
 - Additional remote: Amp-hosted `origin` remains read-only for this work
 - Amp project and `origin` still use `moeit/token-usage` pending a Puck-managed rename
 - Toolchain: Rust 1.96.0; repository checks are defined in `AGENTS.md`
@@ -44,8 +44,9 @@ Every commit must include the corresponding update to this file: task status, de
 | M2-05 Source health | coordinator | `27372d3` | collector diagnostics and checkpoints | pushed | portable health-state tests; storage integration; workspace checks | committed and pushed as `12f5539` |
 | M2-06 Cost facts | coordinator | `12f5539` | canonical event-cost ingestion contract | pushed | provider-cost atomicity; Pi pipeline; workspace checks | committed and pushed as `8080c26` |
 | M2-07 Reconciliation report | coordinator | `8080c26` | complete collector facts | pushed | deterministic reconciliation/cross-check fixtures; workspace checks | committed and pushed as `e5d77ee` |
-| M2-08 Variant assessment | coordinator | `e5d77ee` | upstream Codex/Pi contracts | completed | official-source evidence; variant fixtures where supported; workspace checks | compressed Codex, exec/source classification, ephemeral limits, and Pi flat/nested discovery assessed; ready to commit and push |
-| M3-01 GPUI window shell | coordinator | M2-08 commit | tested GPUI revision | queued | macOS compile; locale/theme shell tests; representative UI verification | pin GPUI and land the first portable presentation shell |
+| M2-08 Variant assessment | coordinator | `e5d77ee` | upstream Codex/Pi contracts | pushed | official-source evidence; variant fixtures where supported; workspace checks | committed and pushed as `eb161d5` |
+| M3-01 GPUI window shell | coordinator | `eb161d5` | tested GPUI revision | implemented; macOS validation pending | macOS compile; locale/theme shell tests; representative UI verification | pinned GPUI and portable shell are verified on Linux; launch and visual acceptance require a macOS runner |
+| M3-02 Overview snapshot | coordinator | M3-01 commit | portable shell and aggregate queries | queued | snapshot-generation tests; async stale-result tests; workspace checks | validate M3-01 on macOS, then connect immutable overview data off the render path |
 
 ## Verification contract
 
@@ -174,6 +175,17 @@ Every commit must include the corresponding update to this file: task status, de
 - `cargo fmt --all --check`, `cargo check --workspace --all-targets`, and `cargo clippy --workspace --all-targets -- -D warnings`: passed.
 - `cargo test --workspace`: passed (75 tests: 66 unit tests and 9 storage/pipeline integration tests).
 - `git diff --check` passed; the final privacy-pattern scan found only policy examples and intentional synthetic fixture paths.
+
+## M3-01 verification evidence
+
+- GPUI 0.2.2 and `gpui_platform` are pinned to exact Zed revision `c24358d96cdb4ce14ecbc088462295353b0103f0`, the last upstream main revision before its Rust 1.97 toolchain bump; both crates declare Apache-2.0 and the workspace remains on Rust 1.96.0.
+- GPUI dependencies are scoped to macOS. Portable `ShellState` owns the selected route, locale, theme preference, system appearance, and semantic palette; GPUI owns only window/view rendering.
+- The first window provides localized Overview, Sessions, Sources, Models, Pricing, and Settings navigation, semantic light/dark colors, system appearance observation, pointer navigation, tab stops, button roles, accessibility labels, and visible keyboard focus.
+- Portable tests cover default and changed routes, complete English/Chinese navigation, system and explicit theme resolution, and preserving route selection across locale/theme updates.
+- `cargo fmt --all --check`, `cargo check --workspace --all-targets`, and `cargo clippy --workspace --all-targets -- -D warnings` passed on the Linux orb after resolving the exact dependency graph.
+- `cargo test --workspace` passed (77 tests: 68 unit tests and 9 storage/pipeline integration tests).
+- A Linux-to-`aarch64-apple-darwin` check advanced through GPUI dependencies with Clang but stopped in upstream `media` binding generation because the orb has no macOS SDK; this is an environment limitation, not a successful macOS compile.
+- A macOS runner was unavailable. Native compilation, launch, interaction, accessibility inspection, and the required representative light/dark English/Chinese visual matrix remain pending and must not be inferred from Linux checks.
 
 ## Budget ledger
 
