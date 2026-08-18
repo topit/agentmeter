@@ -1,0 +1,11 @@
+[package]
+name = "agentmeter-desktop"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+agentmeter-core = { path = "../../crates/agentmeter-core" }
+
+[lints]
+workspace = true

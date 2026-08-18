@@ -4,4 +4,60 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
-echo "Orb setup: no project dependencies to install."
+echo "[setup] Checking system packages"
+packages=(
+  build-essential
+  clang
+  cmake
+  curl
+  libfontconfig-dev
+  libvulkan1
+  libwayland-dev
+  libx11-xcb-dev
+  libxkbcommon-x11-dev
+  pkg-config
+  xdg-desktop-portal
+)
+missing=()
+for package in "${packages[@]}"; do
+  if ! dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -Fq "install ok installed"; then
+    missing+=("$package")
+  fi
+done
+
+if ((${#missing[@]})); then
+  sudo apt-get update
+  sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y "${missing[@]}"
+fi
+
+echo "[setup] Installing the pinned Rust toolchain"
+if [[ ! -x "$HOME/.cargo/bin/rustup" ]]; then
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
+    sh -s -- -y --profile minimal --default-toolchain none
+fi
+
+# shellcheck disable=SC1091
+source "$HOME/.cargo/env"
+rust_version="$(sed -n 's/^channel = "\([^"]*\)"/\1/p' rust-toolchain.toml)"
+rustup toolchain install "$rust_version" --profile minimal
+rustup component add --toolchain "$rust_version" clippy rustfmt
+
+profile_marker="# agentmeter Rust toolchain"
+if ! grep -Fqx "$profile_marker" "$HOME/.bash_profile" 2>/dev/null; then
+  cat >> "$HOME/.bash_profile" <<'EOF'
+
+# agentmeter Rust toolchain
+if [[ -f "$HOME/.cargo/env" ]]; then
+  source "$HOME/.cargo/env"
+fi
+EOF
+fi
+
+echo "[setup] Fetching Cargo dependencies"
+if [[ -f Cargo.lock ]]; then
+  cargo fetch --locked
+else
+  cargo fetch
+fi
+
+echo "[setup] Complete"
