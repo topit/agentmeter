@@ -760,6 +760,34 @@ mod tests {
     }
 
     #[test]
+    fn discovers_retained_flat_and_current_project_nested_sessions() {
+        let root = TempDir::new().unwrap();
+        let nested = root.path().join("--fixture-project--");
+        fs::create_dir_all(&nested).unwrap();
+        write_lines(
+            &root.path().join("legacy-flat.jsonl"),
+            &[header("session-synthetic-flat", None, 1)],
+        );
+        write_lines(
+            &nested.join("current-nested.jsonl"),
+            &[header("session-synthetic-nested", None, 3)],
+        );
+
+        let sources = PiJsonlAdapter::new(root.path()).discover().unwrap();
+        assert_eq!(sources.len(), 2);
+        assert!(
+            sources
+                .iter()
+                .any(|source| source.path.parent() == Some(root.path()))
+        );
+        assert!(
+            sources
+                .iter()
+                .any(|source| source.path.parent() == Some(nested.as_path()))
+        );
+    }
+
+    #[test]
     fn normalizes_assistant_and_summary_usage_without_content() {
         let root = TempDir::new().unwrap();
         let path = root.path().join("session.jsonl");

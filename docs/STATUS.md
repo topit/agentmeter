@@ -16,8 +16,8 @@ Every commit must include the corresponding update to this file: task status, de
 
 ## Operational reality
 
-- Base revision: `8080c26` (`Persist provider-reported cost facts`)
-- Branch: `main`, tracking GitHub `github/main`; M1 through M2-06 have been pushed
+- Base revision: `e5d77ee` (`Add periodic reconciliation reports`)
+- Branch: `main`, tracking GitHub `github/main`; M1 through M2-07 have been pushed
 - Additional remote: Amp-hosted `origin` remains read-only for this work
 - Amp project and `origin` still use `moeit/token-usage` pending a Puck-managed rename
 - Toolchain: Rust 1.96.0; repository checks are defined in `AGENTS.md`
@@ -43,8 +43,9 @@ Every commit must include the corresponding update to this file: task status, de
 | M2-04 Pi | coordinator | `5b54c3e` | upstream format research | pushed | fixture and cross-check suite | committed and pushed as `75ec3c7` |
 | M2-05 Source health | coordinator | `27372d3` | collector diagnostics and checkpoints | pushed | portable health-state tests; storage integration; workspace checks | committed and pushed as `12f5539` |
 | M2-06 Cost facts | coordinator | `12f5539` | canonical event-cost ingestion contract | pushed | provider-cost atomicity; Pi pipeline; workspace checks | committed and pushed as `8080c26` |
-| M2-07 Reconciliation report | coordinator | `8080c26` | complete collector facts | completed | deterministic reconciliation/cross-check fixtures; workspace checks | due-source rebuild gate and content-free versioned report verified; ready to commit and push |
-| M2-08 Variant assessment | coordinator | M2-07 commit | upstream Codex/Pi contracts | queued | official-source evidence; variant fixtures where supported; workspace checks | assess Codex compressed/headless and Pi legacy location before support claims |
+| M2-07 Reconciliation report | coordinator | `8080c26` | complete collector facts | pushed | deterministic reconciliation/cross-check fixtures; workspace checks | committed and pushed as `e5d77ee` |
+| M2-08 Variant assessment | coordinator | `e5d77ee` | upstream Codex/Pi contracts | completed | official-source evidence; variant fixtures where supported; workspace checks | compressed Codex, exec/source classification, ephemeral limits, and Pi flat/nested discovery assessed; ready to commit and push |
+| M3-01 GPUI window shell | coordinator | M2-08 commit | tested GPUI revision | queued | macOS compile; locale/theme shell tests; representative UI verification | pin GPUI and land the first portable presentation shell |
 
 ## Verification contract
 
@@ -161,6 +162,17 @@ Every commit must include the corresponding update to this file: task status, de
 - Aggregate fixture/reference expectations are constrained to reviewed source UI/CLI, Waku, Tokens, Tokscale, ccusage, or fixture categories. Amp, Codex, and Pi storage pipelines all cross-check their expected adapter totals through the report API.
 - `cargo fmt --all --check`, `cargo check --workspace --all-targets`, and `cargo clippy --workspace --all-targets -- -D warnings`: passed after one candidate rerun fixed a test-only macro import.
 - `cargo test --workspace`: passed (71 tests: 62 unit tests and 9 storage/pipeline integration tests).
+- `git diff --check` passed; the final privacy-pattern scan found only policy examples and intentional synthetic fixture paths.
+
+## M2-08 verification evidence
+
+- Current official Codex rollout code defines `.jsonl.zst` as a complete zstd-compressed JSONL stream in the same active/archive roots and prefers a plain sibling. AgentMeter mirrors that identity/precedence, decodes through the existing parser, always replaces compressed sources, and fails corrupt frames visibly.
+- Persistent `codex exec` uses the normal rollout with source `exec`; no separate headless parser is needed. Ephemeral exec/App Server sessions have no rollout and are documented as unavailable. Non-CLI rollout sources are skipped with a warning instead of being mislabeled `codex-cli`.
+- Codex parser version 3 rebuilds affected checkpoints for source classification. Synthetic tests cover active/archive/plain/compressed precedence, exact decompression, repeated replacement, corrupt zstd, accepted exec, and deferred `vscode` source behavior.
+- Current Pi source and history confirm project-nested defaults and retained flat/custom directories share one JSONL contract. Recursive discovery already covered both; a focused fixture now proves simultaneous flat v1 and nested v3 discovery.
+- `zstd` 0.13.3 is used directly for official compressed rollouts. Its Rust wrapper is MIT, the safe/sys layers are MIT or Apache-2.0, the minimum Rust version is below the workspace toolchain, and its bundled native implementation supports the macOS-first/Windows-later target boundary.
+- `cargo fmt --all --check`, `cargo check --workspace --all-targets`, and `cargo clippy --workspace --all-targets -- -D warnings`: passed.
+- `cargo test --workspace`: passed (75 tests: 66 unit tests and 9 storage/pipeline integration tests).
 - `git diff --check` passed; the final privacy-pattern scan found only policy examples and intentional synthetic fixture paths.
 
 ## Budget ledger

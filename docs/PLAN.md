@@ -498,4 +498,4 @@ These decisions do not block M1 but should be settled before macOS beta:
 
 ## 19. Immediate next implementation step
 
-Assess Codex compressed/headless variants and Pi's retained legacy one-directory location against current upstream contracts. Add only evidence-backed discovery/parser coverage, document unsupported variants explicitly, and do not call either adapter supported before the remaining UI acceptance gates exist.
+Begin M3 by selecting and pinning a tested GPUI revision, then land the first macOS window and navigation shell without moving collection or storage work onto the render path. The first UI commit must preserve the existing English/Chinese and System/Light/Dark contracts and establish a portable presentation boundary before overview data is connected.

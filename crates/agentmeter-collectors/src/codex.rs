@@ -12,7 +12,7 @@ use std::{
 use agentmeter_core::{
     DataConfidence, EventProvenance, TimestampOrigin, TokenBreakdown, UsageEvent, UsageRecord,
 };
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use crate::{
@@ -23,7 +23,7 @@ use crate::{
     },
 };
 
-const PARSER_VERSION: u32 = 2;
+const PARSER_VERSION: u32 = 3;
 const SCHEMA_VARIANT: &str = "codex-rollout-jsonl-v2";
 
 #[derive(Clone, Debug)]
@@ -56,8 +56,8 @@ impl CodexJsonlAdapter {
 
     fn discover_root(
         root: &Path,
-        sources: &mut BTreeMap<String, SourceCandidate>,
-        replace_existing: bool,
+        sources: &mut BTreeMap<String, (u8, SourceCandidate)>,
+        root_priority: u8,
     ) -> Result<(), CollectorError> {
         if !root.exists() {
             return Ok(());
@@ -71,21 +71,28 @@ impl CodexJsonlAdapter {
                     pending.push(entry.path());
                     continue;
                 }
-                if !file_type.is_file()
-                    || entry.path().extension().and_then(|ext| ext.to_str()) != Some("jsonl")
-                {
+                if !file_type.is_file() {
                     continue;
                 }
-                let source_key = entry.file_name().to_string_lossy().into_owned();
+                let file_name = entry.file_name().to_string_lossy().into_owned();
+                let (source_key, format_priority) = if file_name.ends_with(".jsonl") {
+                    (file_name, 1)
+                } else if let Some(source_key) = file_name.strip_suffix(".jsonl.zst") {
+                    (format!("{source_key}.jsonl"), 0)
+                } else {
+                    continue;
+                };
                 let candidate = SourceCandidate {
                     path: entry.path(),
                     kind: SourceKind::AppendOnlyJsonl,
                     source_key: source_key.clone(),
                 };
-                if replace_existing {
-                    sources.insert(source_key, candidate);
-                } else {
-                    sources.entry(source_key).or_insert(candidate);
+                let priority = root_priority.saturating_add(format_priority);
+                if sources
+                    .get(&source_key)
+                    .is_none_or(|(existing_priority, _)| priority > *existing_priority)
+                {
+                    sources.insert(source_key, (priority, candidate));
                 }
             }
         }
@@ -104,15 +111,14 @@ impl CollectorAdapter for CodexJsonlAdapter {
 
     fn discover(&self) -> Result<Vec<SourceCandidate>, CollectorError> {
         let mut sources = BTreeMap::new();
-        Self::discover_root(
-            &self.codex_home.join("archived_sessions"),
-            &mut sources,
-            false,
-        )?;
+        Self::discover_root(&self.codex_home.join("archived_sessions"), &mut sources, 0)?;
         // During an interrupted archive operation both copies may exist. The
         // active source wins, while source_key remains stable after movement.
-        Self::discover_root(&self.codex_home.join("sessions"), &mut sources, true)?;
-        Ok(sources.into_values().collect())
+        Self::discover_root(&self.codex_home.join("sessions"), &mut sources, 2)?;
+        Ok(sources
+            .into_values()
+            .map(|(_, candidate)| candidate)
+            .collect())
     }
 
     fn ingest(
@@ -121,11 +127,13 @@ impl CollectorAdapter for CodexJsonlAdapter {
         start: IngestStart<'_>,
     ) -> Result<IngestBatch, CollectorError> {
         ensure_kind(source, SourceKind::AppendOnlyJsonl)?;
+        let compressed = is_compressed(&source.path);
         let metadata = source.path.metadata().map_err(io_error)?;
         let observed_source_len = metadata.len();
         let file_modified_unix_ms = modified_unix_ms(&metadata)?;
 
         let (mode, start_offset, mut state) = match start {
+            _ if compressed => (IngestMode::Replace, 0, ParserState::default()),
             IngestStart::Resume(checkpoint)
                 if checkpoint_continues(&source.path, checkpoint, observed_source_len)? =>
             {
@@ -141,10 +149,7 @@ impl CollectorAdapter for CodexJsonlAdapter {
             IngestStart::Fresh => (IngestMode::Append, 0, ParserState::default()),
         };
 
-        let mut reader = BufReader::new(File::open(&source.path).map_err(io_error)?);
-        reader
-            .seek(SeekFrom::Start(start_offset))
-            .map_err(io_error)?;
+        let mut reader = open_rollout(&source.path, start_offset)?;
         let mut records = Vec::new();
         let (mut replay, mut warnings) = if start_offset == 0 {
             self.lineage_plan(source, &mut state)
@@ -172,7 +177,7 @@ impl CollectorAdapter for CodexJsonlAdapter {
         let mut committed_offset = start_offset;
 
         loop {
-            let record_offset = reader.stream_position().map_err(io_error)?;
+            let record_offset = committed_offset;
             let mut line = String::new();
             let bytes_read = reader.read_line(&mut line).map_err(io_error)?;
             if bytes_read == 0 {
@@ -184,7 +189,7 @@ impl CollectorAdapter for CodexJsonlAdapter {
                 ));
                 break;
             }
-            committed_offset = reader.stream_position().map_err(io_error)?;
+            committed_offset = committed_offset.saturating_add(bytes_read as u64);
             let trimmed = line.trim();
             if trimmed.is_empty() {
                 continue;
@@ -215,9 +220,11 @@ impl CollectorAdapter for CodexJsonlAdapter {
             mode,
             records,
             checkpoint: SourceCheckpoint {
-                byte_offset: Some(committed_offset),
+                byte_offset: (!compressed).then_some(committed_offset),
                 source_len,
-                prefix_fingerprint: Some(hash_prefix(&source.path, committed_offset)?),
+                prefix_fingerprint: (!compressed)
+                    .then(|| hash_prefix(&source.path, committed_offset))
+                    .transpose()?,
                 parser_state: serde_json::to_vec(&state)
                     .map_err(|error| CollectorError::new(error.to_string()))?,
             },
@@ -386,6 +393,8 @@ struct RolloutPayload {
     forked_from_id: Option<String>,
     history_mode: Option<String>,
     history_base: Option<HistoryBase>,
+    #[serde(deserialize_with = "deserialize_source_tag")]
+    source: Option<String>,
     model_provider: Option<String>,
     model: Option<String>,
     info: Option<TokenUsageInfo>,
@@ -511,6 +520,7 @@ struct ParserState {
     provider: Option<String>,
     previous_total: Option<RawUsage>,
     seen_session_meta: bool,
+    unsupported_source: bool,
     lineage_unresolved: bool,
     legacy_replay_cursor: usize,
     legacy_replay_matching: bool,
@@ -531,6 +541,18 @@ fn process_envelope(
         "session_meta" => {
             if !state.seen_session_meta {
                 state.seen_session_meta = true;
+                if envelope
+                    .payload
+                    .source
+                    .as_deref()
+                    .is_some_and(|source| !matches!(source, "cli" | "exec"))
+                {
+                    state.unsupported_source = true;
+                    warnings.push(
+                        "Codex rollout belongs to a non-CLI session source; usage was skipped"
+                            .to_owned(),
+                    );
+                }
                 state.thread_id = envelope
                     .payload
                     .id
@@ -554,6 +576,9 @@ fn process_envelope(
             None
         }
         "event_msg" if envelope.payload.kind.as_deref() == Some("token_count") => {
+            if state.unsupported_source {
+                return None;
+            }
             let Some(info) = envelope.payload.info else {
                 warnings.push(format!(
                     "Codex token_count at byte {record_offset} has no usage info; skipped"
@@ -783,9 +808,22 @@ fn finish_usage(
     }
 }
 
+fn deserialize_source_tag<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(
+        match Option::<serde_json::Value>::deserialize(deserializer)? {
+            None => None,
+            Some(serde_json::Value::String(source)) => Some(source),
+            Some(_) => Some("non_cli".to_owned()),
+        },
+    )
+}
+
 fn read_first_metadata(path: &Path) -> Option<SessionMetadata> {
-    let file = File::open(path).ok()?;
-    for line in BufReader::new(file).lines() {
+    let reader = open_rollout(path, 0).ok()?;
+    for line in reader.lines() {
         let line = line.ok()?;
         if line.trim().is_empty() {
             continue;
@@ -832,10 +870,10 @@ fn read_token_signatures(path: &Path, end_timestamp: Option<&str>) -> Vec<TokenS
     let Some(end_millis) = end_timestamp.and_then(parse_rfc3339_millis) else {
         return Vec::new();
     };
-    let Ok(file) = File::open(path) else {
+    let Ok(reader) = open_rollout(path, 0) else {
         return Vec::new();
     };
-    BufReader::new(file)
+    reader
         .lines()
         .map_while(Result::ok)
         .filter_map(|line| serde_json::from_str::<RolloutEnvelope>(&line).ok())
@@ -858,15 +896,7 @@ fn read_token_signatures(path: &Path, end_timestamp: Option<&str>) -> Vec<TokenS
 }
 
 fn read_baseline_at(path: &Path, base: &HistoryBase) -> Result<Option<RawUsage>, String> {
-    let source_len = path.metadata().map_err(|error| error.to_string())?.len();
-    if base.end_byte_offset > source_len {
-        return Err(format!(
-            "parent cutoff byte {} exceeds source length {source_len}",
-            base.end_byte_offset
-        ));
-    }
-    let file = File::open(path).map_err(|error| error.to_string())?;
-    let mut reader = BufReader::new(file);
+    let mut reader = open_rollout(path, 0).map_err(|error| error.message)?;
     let mut position = 0_u64;
     let mut baseline: Option<RawUsage> = None;
     while position < base.end_byte_offset {
@@ -920,6 +950,29 @@ fn read_baseline_at(path: &Path, base: &HistoryBase) -> Result<Option<RawUsage>,
         ));
     }
     Ok(baseline)
+}
+
+fn is_compressed(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.ends_with(".jsonl.zst"))
+}
+
+fn open_rollout(path: &Path, offset: u64) -> Result<Box<dyn BufRead>, CollectorError> {
+    let file = File::open(path).map_err(io_error)?;
+    if is_compressed(path) {
+        if offset != 0 {
+            return Err(CollectorError::new(
+                "compressed Codex rollouts cannot resume from a byte offset",
+            ));
+        }
+        let decoder = zstd::stream::read::Decoder::new(file).map_err(io_error)?;
+        Ok(Box::new(BufReader::new(decoder)))
+    } else {
+        let mut file = file;
+        file.seek(SeekFrom::Start(offset)).map_err(io_error)?;
+        Ok(Box::new(BufReader::new(file)))
+    }
 }
 
 fn decode_state(bytes: &[u8]) -> Result<ParserState, CollectorError> {
@@ -1002,14 +1055,102 @@ mod tests {
         fs::write(active.join("rollout-a.jsonl"), "").unwrap();
         fs::write(archived.join("rollout-a.jsonl"), "archived").unwrap();
         fs::write(archived.join("rollout-b.jsonl"), "").unwrap();
+        fs::write(archived.join("rollout-c.jsonl"), "archived").unwrap();
+        fs::write(active.join("rollout-c.jsonl.zst"), "compressed").unwrap();
+        fs::write(active.join("rollout-d.jsonl.zst"), "compressed").unwrap();
+        fs::write(active.join("rollout-d.jsonl"), "plain").unwrap();
 
         let sources = CodexJsonlAdapter::new(home.path()).discover().unwrap();
-        assert_eq!(sources.len(), 2);
+        assert_eq!(sources.len(), 4);
         let rollout_a = sources
             .iter()
             .find(|source| source.source_key == "rollout-a.jsonl")
             .unwrap();
         assert!(rollout_a.path.starts_with(&active));
+        let rollout_c = sources
+            .iter()
+            .find(|source| source.source_key == "rollout-c.jsonl")
+            .unwrap();
+        assert_eq!(rollout_c.path.file_name().unwrap(), "rollout-c.jsonl.zst");
+        let rollout_d = sources
+            .iter()
+            .find(|source| source.source_key == "rollout-d.jsonl")
+            .unwrap();
+        assert_eq!(rollout_d.path.file_name().unwrap(), "rollout-d.jsonl");
+    }
+
+    #[test]
+    fn compressed_rollout_reuses_jsonl_parser_and_always_rebuilds() {
+        let home = TempDir::new().unwrap();
+        let active = home.path().join("sessions/2024/01/01");
+        fs::create_dir_all(&active).unwrap();
+        let contents = format!("{META}\n{TURN}\n{}\n", token(2, 100, 50));
+        let path = active.join("rollout-synthetic.jsonl.zst");
+        fs::write(
+            &path,
+            zstd::stream::encode_all(contents.as_bytes(), 3).unwrap(),
+        )
+        .unwrap();
+
+        let adapter = CodexJsonlAdapter::new(home.path());
+        let source = adapter.discover().unwrap().pop().unwrap();
+        assert_eq!(source.source_key, "rollout-synthetic.jsonl");
+        let first = adapter.ingest(&source, IngestStart::Fresh).unwrap();
+        assert_eq!(first.mode, IngestMode::Replace);
+        assert_eq!(first.records.len(), 1);
+        assert_eq!(first.records[0].event.tokens.checked_total(), Some(70));
+        assert_eq!(first.checkpoint.byte_offset, None);
+        assert_eq!(first.checkpoint.prefix_fingerprint, None);
+
+        let repeated = adapter
+            .ingest(&source, IngestStart::Resume(&first.checkpoint))
+            .unwrap();
+        assert_eq!(repeated.mode, IngestMode::Replace);
+        assert_eq!(repeated.records, first.records);
+    }
+
+    #[test]
+    fn corrupt_compressed_rollout_fails_instead_of_reporting_zero() {
+        let home = TempDir::new().unwrap();
+        let active = home.path().join("sessions");
+        fs::create_dir_all(&active).unwrap();
+        fs::write(active.join("rollout-corrupt.jsonl.zst"), "not-zstd").unwrap();
+        let adapter = CodexJsonlAdapter::new(home.path());
+        let source = adapter.discover().unwrap().pop().unwrap();
+
+        assert!(adapter.ingest(&source, IngestStart::Fresh).is_err());
+    }
+
+    #[test]
+    fn exec_uses_cli_contract_while_non_cli_rollouts_are_deferred() {
+        for (source_tag, expected_records) in [("exec", 1), ("vscode", 0)] {
+            let mut file = NamedTempFile::new().unwrap();
+            writeln!(
+                file,
+                "{}",
+                serde_json::json!({
+                    "timestamp":"2024-01-01T00:00:00Z","ordinal":0,
+                    "type":"session_meta","payload":{
+                        "id":"thread-synthetic-source","source":source_tag,
+                        "model_provider":"openai"
+                    }
+                })
+            )
+            .unwrap();
+            writeln!(file, "{TURN}").unwrap();
+            writeln!(file, "{}", token(2, 100, 50)).unwrap();
+            file.flush().unwrap();
+            let adapter = CodexJsonlAdapter::new("unused");
+            let source = crate::SourceCandidate {
+                path: file.path().to_owned(),
+                kind: crate::SourceKind::AppendOnlyJsonl,
+                source_key: format!("rollout-{source_tag}.jsonl"),
+            };
+
+            let batch = adapter.ingest(&source, IngestStart::Fresh).unwrap();
+            assert_eq!(batch.records.len(), expected_records);
+            assert_eq!(batch.warnings.is_empty(), source_tag == "exec");
+        }
     }
 
     #[test]
