@@ -12,8 +12,8 @@ This file is the durable execution ledger for the current milestone. Product and
 
 ## Operational reality
 
-- Base revision: `dbbd1af7ce63ea9a6effba8d044241110332dca1`
-- Branch: `main`, tracking GitHub `github/main`; the M1 history has been pushed
+- Base revision: `5ac3e1e089a7fae3f67fe181382de80d4d183175`
+- Branch: `main`, tracking GitHub `github/main`; M1 and M2-01 have been pushed
 - Additional remote: Amp-hosted `origin` remains read-only for this work
 - Amp project and `origin` still use `moeit/token-usage` pending a Puck-managed rename
 - Toolchain: Rust 1.96.0; repository checks are defined in `AGENTS.md`
@@ -32,8 +32,8 @@ This file is the durable execution ledger for the current milestone. Product and
 
 | Task | Owner | Base | Depends on | Status | Required verification | Result / next action |
 |---|---|---|---|---|---|---|
-| M2-01 Amp Stream JSON | coordinator | `dbbd1af` | M1 ledger | integrated | fixture tests; collector-to-storage pipeline; workspace checks | all checks passed; ready to commit and push |
-| M2-02 Amp local history | coordinator | M2-01 | undocumented schema research | queued | reconciliation fixtures; independent parser cross-check | implement as experimental, bounded whole-file replacement |
+| M2-01 Amp Stream JSON | coordinator | `dbbd1af` | M1 ledger | pushed | fixture tests; collector-to-storage pipeline; workspace checks | committed and pushed as `5ac3e1e` |
+| M2-02 Amp local history | coordinator | `5ac3e1e` | undocumented schema research | integrated | reconciliation fixtures; independent parser cross-check; workspace checks | all checks passed; ready to commit and push |
 | M2-03 Codex CLI | coordinator | M2-02 | upstream format research | queued | fork/replay/cumulative fixtures and cross-check | not started |
 | M2-04 Pi | coordinator | M2-03 | upstream format research | queued | fixture and cross-check suite | not started |
 
@@ -78,6 +78,17 @@ This file is the durable execution ledger for the current milestone. Product and
 - Amp-specific collector tests cover documented flat usage, observed iteration usage, top-level filtering, append, rewrite, malformed, zero-token, and incomplete-tail behavior.
 - The Amp collector-to-storage integration test verifies resumed append and canonical daily aggregation.
 - `git diff --check` and privacy-pattern scan passed; the sole path match is an intentional `/fixture/home/...` synthetic path.
+
+## M2-02 verification evidence
+
+- `cargo fmt --all --check`: passed.
+- `cargo check --workspace --all-targets`: passed.
+- `cargo test --workspace`: passed (40 tests: 35 unit tests and 5 integration tests).
+- `cargo clippy --workspace --all-targets -- -D warnings`: passed.
+- Amp local-history tests cover discovery, full/partial ledger reconciliation, message-ID precedence, disagreement diagnostics, malformed/schema-drift input, invalid timestamps, negative/zero counters, and portable custom roots.
+- Collector-to-storage integration verifies source-owned replacement removes stale events and rebuilds canonical daily usage.
+- Reconciliation outcomes were compared with the current Tokens and Tokscale Amp parsers; AgentMeter deliberately avoids their inferred Anthropic provider and synthetic per-message timestamp.
+- `git diff --check` and privacy-pattern scan passed; both path matches are intentional `/fixture/home/...` synthetic paths and fixtures contain no content-bearing message/tool fields.
 
 ## Budget ledger
 

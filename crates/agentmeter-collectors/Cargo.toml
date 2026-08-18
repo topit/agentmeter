@@ -9,6 +9,7 @@ agentmeter-core = { path = "../agentmeter-core" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 sha2 = "0.11.0"
+time = { version = "0.3.47", features = ["parsing"] }
 
 [dev-dependencies]
 tempfile = "3.27.0"

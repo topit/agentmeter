@@ -4,6 +4,8 @@
 //! This adapter therefore consumes an explicitly captured NDJSON stream and
 //! does not inspect prompts, responses, or tool payloads.
 
+pub mod local_history;
+
 use std::{
     fs::File,
     io::{BufRead, BufReader, Seek, SeekFrom},
@@ -288,7 +290,7 @@ impl UsageTokens {
     }
 }
 
-fn modified_unix_ms(metadata: &std::fs::Metadata) -> Result<i64, CollectorError> {
+pub(super) fn modified_unix_ms(metadata: &std::fs::Metadata) -> Result<i64, CollectorError> {
     let duration = metadata
         .modified()
         .map_err(io_error)?

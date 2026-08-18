@@ -490,4 +490,4 @@ These decisions do not block M1 but should be settled before macOS beta:
 
 ## 19. Immediate next implementation step
 
-Complete the experimental Amp local-history adapter and cross-check its `usageLedger`/assistant-message reconciliation against independent parsers. Keep the official Stream JSON collector separate so an undocumented local schema change cannot corrupt authoritative captured usage.
+Implement Codex CLI as the next M2 adapter, beginning with upstream format research and synthetic fork/replay/cumulative fixtures. Keep Amp local history experimental until source-health/i18n/UI criteria and representative source-total cross-checks are complete.
