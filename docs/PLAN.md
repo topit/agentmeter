@@ -1,6 +1,6 @@
 # AgentMeter product and engineering plan
 
-- Status: M2 collector implementation in progress; Amp, Codex, and Pi parser milestones implemented
+- Status: M3 GPUI application shell in progress; overview and sources views implemented
 - Product name: AgentMeter
 - Primary platform: macOS
 - Future platform: Windows
@@ -499,4 +499,4 @@ These decisions do not block M1 but should be settled before macOS beta:
 
 ## 19. Immediate next implementation step
 
-Continue from the handoff in `docs/STATUS.md`: build M3-04 Sources presentation from immutable source-health snapshots, including localized status, remediation, loading, empty, and error states with stale-result rejection and no filesystem work on the render path. Native Overview and shell acceptance remain required before M3 exits; rerun the full locale/theme matrix after the macOS runner has a working Metal Toolchain.
+Continue from the handoff in `docs/STATUS.md`: M3-04 Sources presentation is complete. Build M3-05 Settings presentation: language and appearance preference controls persisted through the application service with portable tests and no filesystem work on the render path. Native shell, Overview, and Sources acceptance remains required before M3 exits; rerun the full locale/theme matrix after the Mac has a working Metal Toolchain.

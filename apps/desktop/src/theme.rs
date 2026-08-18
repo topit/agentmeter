@@ -35,6 +35,10 @@ impl ResolvedTheme {
                 accent_text: 0xffffff,
                 hover: 0xebf3fb,
                 focus_ring: 0x0b6fc2,
+                success: 0x1a7f37,
+                warning: 0x9a6700,
+                danger: 0xcf222e,
+                info: 0x0969da,
             },
             Self::Dark => ThemePalette {
                 background: 0x151617,
@@ -46,6 +50,10 @@ impl ResolvedTheme {
                 accent_text: 0x0d2235,
                 hover: 0x293847,
                 focus_ring: 0x86c5ff,
+                success: 0x3fb950,
+                warning: 0xd29922,
+                danger: 0xf85149,
+                info: 0x58a6ff,
             },
         }
     }
@@ -64,6 +72,10 @@ pub struct ThemePalette {
     pub accent_text: u32,
     pub hover: u32,
     pub focus_ring: u32,
+    pub success: u32,
+    pub warning: u32,
+    pub danger: u32,
+    pub info: u32,
 }
 
 #[cfg(test)]
@@ -80,5 +92,35 @@ mod tests {
     fn explicit_theme_ignores_platform_appearance() {
         assert_eq!(ThemeMode::Light.resolve(true), ResolvedTheme::Light);
         assert_eq!(ThemeMode::Dark.resolve(false), ResolvedTheme::Dark);
+    }
+
+    #[test]
+    fn status_colors_stay_distinct_in_both_themes() {
+        for palette in [
+            ResolvedTheme::Light.palette(),
+            ResolvedTheme::Dark.palette(),
+        ] {
+            let status_colors = [
+                palette.success,
+                palette.warning,
+                palette.danger,
+                palette.info,
+                palette.muted_text,
+            ];
+            for (index, color) in status_colors.iter().enumerate() {
+                assert!(
+                    !status_colors[..index].contains(color),
+                    "status colors must stay distinguishable"
+                );
+                assert_ne!(
+                    *color, palette.background,
+                    "status must be visible on the background"
+                );
+                assert_ne!(
+                    *color, palette.surface,
+                    "status must be visible on surfaces"
+                );
+            }
+        }
     }
 }

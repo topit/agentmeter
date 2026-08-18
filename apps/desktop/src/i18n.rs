@@ -1,4 +1,4 @@
-use agentmeter_core::{NanoUsd, SourceHealthState, SourceRemediation};
+use agentmeter_core::{NanoUsd, SourceHealthState, SourcePermissionState, SourceRemediation};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum Locale {
@@ -66,6 +66,28 @@ impl Locale {
             }
             (Self::En, MessageKey::RemediationRetryCollection) => "Retry collection.",
             (Self::En, MessageKey::RemediationReviewWarnings) => "Review the collection warnings.",
+            (Self::En, MessageKey::SourcesLoading) => "Loading sources…",
+            (Self::En, MessageKey::SourcesEmptyTitle) => "No sources configured yet",
+            (Self::En, MessageKey::SourcesEmptyBody) => {
+                "Discovered agent installations and their collection status will appear here."
+            }
+            (Self::En, MessageKey::SourcesErrorTitle) => "Sources unavailable",
+            (Self::En, MessageKey::SourcesAdapter) => "Adapter",
+            (Self::En, MessageKey::SourcesSourcePath) => "Path",
+            (Self::En, MessageKey::SourcesSourceKind) => "Type",
+            (Self::En, MessageKey::SourcesParserVersion) => "Parser version",
+            (Self::En, MessageKey::SourcesPermission) => "Permission",
+            (Self::En, MessageKey::SourcesLastScan) => "Last scan",
+            (Self::En, MessageKey::SourcesLastSuccess) => "Last successful scan",
+            (Self::En, MessageKey::SourcesLastEvent) => "Latest event",
+            (Self::En, MessageKey::SourcesRecordsChanged) => "Records changed",
+            (Self::En, MessageKey::SourcesWarnings) => "Warnings",
+            (Self::En, MessageKey::SourcesErrorLabel) => "Error",
+            (Self::En, MessageKey::SourcesRemediation) => "Next step",
+            (Self::En, MessageKey::PermissionUnknown) => "Unknown",
+            (Self::En, MessageKey::PermissionGranted) => "Granted",
+            (Self::En, MessageKey::PermissionDenied) => "Denied",
+            (Self::En, MessageKey::PermissionMissing) => "Missing",
             (Self::ZhCn, MessageKey::AppSubtitle) => "本地 Agent 用量",
             (Self::ZhCn, MessageKey::ShellPlaceholder) => {
                 "本地数据快照可用后，用量视图将在这里显示。"
@@ -111,6 +133,28 @@ impl Locale {
             }
             (Self::ZhCn, MessageKey::RemediationRetryCollection) => "请重试采集。",
             (Self::ZhCn, MessageKey::RemediationReviewWarnings) => "请查看采集警告。",
+            (Self::ZhCn, MessageKey::SourcesLoading) => "正在加载数据源…",
+            (Self::ZhCn, MessageKey::SourcesEmptyTitle) => "暂无已配置的数据源",
+            (Self::ZhCn, MessageKey::SourcesEmptyBody) => {
+                "发现的 Agent 安装及其采集状态将在这里显示。"
+            }
+            (Self::ZhCn, MessageKey::SourcesErrorTitle) => "数据源暂不可用",
+            (Self::ZhCn, MessageKey::SourcesAdapter) => "适配器",
+            (Self::ZhCn, MessageKey::SourcesSourcePath) => "路径",
+            (Self::ZhCn, MessageKey::SourcesSourceKind) => "类型",
+            (Self::ZhCn, MessageKey::SourcesParserVersion) => "解析器版本",
+            (Self::ZhCn, MessageKey::SourcesPermission) => "权限",
+            (Self::ZhCn, MessageKey::SourcesLastScan) => "最近扫描",
+            (Self::ZhCn, MessageKey::SourcesLastSuccess) => "最近成功扫描",
+            (Self::ZhCn, MessageKey::SourcesLastEvent) => "最近事件",
+            (Self::ZhCn, MessageKey::SourcesRecordsChanged) => "变更记录数",
+            (Self::ZhCn, MessageKey::SourcesWarnings) => "警告",
+            (Self::ZhCn, MessageKey::SourcesErrorLabel) => "错误",
+            (Self::ZhCn, MessageKey::SourcesRemediation) => "处理建议",
+            (Self::ZhCn, MessageKey::PermissionUnknown) => "未知",
+            (Self::ZhCn, MessageKey::PermissionGranted) => "已授权",
+            (Self::ZhCn, MessageKey::PermissionDenied) => "已拒绝",
+            (Self::ZhCn, MessageKey::PermissionMissing) => "缺失",
         }
     }
 
@@ -140,6 +184,13 @@ impl Locale {
             Self::ZhCn => "US$",
         };
         format!("{prefix}{}.{fraction}", self.format_count(whole))
+    }
+
+    /// Formats a Unix millisecond instant as an explicitly UTC timestamp so
+    /// collection facts never masquerade as local time.
+    pub fn format_unix_ms_utc(self, unix_ms: i64) -> String {
+        let (year, month, day, hour, minute) = utc_civil(unix_ms);
+        format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02} UTC")
     }
 }
 
@@ -178,6 +229,26 @@ pub enum MessageKey {
     RemediationUpgradeAgentMeter,
     RemediationRetryCollection,
     RemediationReviewWarnings,
+    SourcesLoading,
+    SourcesEmptyTitle,
+    SourcesEmptyBody,
+    SourcesErrorTitle,
+    SourcesAdapter,
+    SourcesSourcePath,
+    SourcesSourceKind,
+    SourcesParserVersion,
+    SourcesPermission,
+    SourcesLastScan,
+    SourcesLastSuccess,
+    SourcesLastEvent,
+    SourcesRecordsChanged,
+    SourcesWarnings,
+    SourcesErrorLabel,
+    SourcesRemediation,
+    PermissionUnknown,
+    PermissionGranted,
+    PermissionDenied,
+    PermissionMissing,
 }
 
 pub fn health_state_key(state: SourceHealthState) -> MessageKey {
@@ -201,11 +272,40 @@ pub fn remediation_key(remediation: SourceRemediation) -> MessageKey {
     }
 }
 
+pub fn permission_key(permission: SourcePermissionState) -> MessageKey {
+    match permission {
+        SourcePermissionState::Unknown => MessageKey::PermissionUnknown,
+        SourcePermissionState::Granted => MessageKey::PermissionGranted,
+        SourcePermissionState::Denied => MessageKey::PermissionDenied,
+        SourcePermissionState::Missing => MessageKey::PermissionMissing,
+    }
+}
+
+/// Splits a Unix millisecond instant into UTC calendar parts. Uses the
+/// floor-division civil-date algorithm so negative instants stay correct.
+fn utc_civil(unix_ms: i64) -> (i64, u32, u32, u32, u32) {
+    let days = unix_ms.div_euclid(86_400_000);
+    let seconds_of_day = unix_ms.rem_euclid(86_400_000) / 1000;
+    let hour = (seconds_of_day / 3_600) as u32;
+    let minute = (seconds_of_day % 3_600 / 60) as u32;
+
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    (year, month, day, hour, minute)
+}
+
 #[cfg(test)]
 mod tests {
-    use agentmeter_core::{NanoUsd, SourceHealthState, SourceRemediation};
+    use agentmeter_core::{NanoUsd, SourceHealthState, SourcePermissionState, SourceRemediation};
 
-    use super::{Locale, MessageKey, health_state_key, remediation_key};
+    use super::{Locale, MessageKey, health_state_key, permission_key, remediation_key};
 
     #[test]
     fn selects_chinese_for_common_language_tags() {
@@ -284,5 +384,62 @@ mod tests {
             assert!(!Locale::En.text(key).is_empty());
             assert!(!Locale::ZhCn.text(key).is_empty());
         }
+        for permission in [
+            SourcePermissionState::Unknown,
+            SourcePermissionState::Granted,
+            SourcePermissionState::Denied,
+            SourcePermissionState::Missing,
+        ] {
+            let key = permission_key(permission);
+            assert!(!Locale::En.text(key).is_empty());
+            assert!(!Locale::ZhCn.text(key).is_empty());
+            assert_ne!(Locale::En.text(key), Locale::ZhCn.text(key));
+        }
+    }
+
+    #[test]
+    fn localizes_every_sources_state_label_and_error() {
+        for key in [
+            MessageKey::SourcesLoading,
+            MessageKey::SourcesEmptyTitle,
+            MessageKey::SourcesEmptyBody,
+            MessageKey::SourcesErrorTitle,
+            MessageKey::SourcesAdapter,
+            MessageKey::SourcesSourcePath,
+            MessageKey::SourcesSourceKind,
+            MessageKey::SourcesParserVersion,
+            MessageKey::SourcesPermission,
+            MessageKey::SourcesLastScan,
+            MessageKey::SourcesLastSuccess,
+            MessageKey::SourcesLastEvent,
+            MessageKey::SourcesRecordsChanged,
+            MessageKey::SourcesWarnings,
+            MessageKey::SourcesErrorLabel,
+            MessageKey::SourcesRemediation,
+            MessageKey::OverviewDataDirectoryError,
+            MessageKey::OverviewDatabaseError,
+        ] {
+            assert!(!Locale::En.text(key).is_empty());
+            assert!(!Locale::ZhCn.text(key).is_empty());
+            assert_ne!(Locale::En.text(key), Locale::ZhCn.text(key));
+        }
+    }
+
+    #[test]
+    fn formats_explicit_utc_timestamps() {
+        assert_eq!(Locale::En.format_unix_ms_utc(0), "1970-01-01 00:00 UTC");
+        assert_eq!(
+            Locale::ZhCn.format_unix_ms_utc(1_787_011_200_000),
+            "2026-08-18 00:00 UTC"
+        );
+        assert_eq!(
+            Locale::En.format_unix_ms_utc(1_787_046_083_000),
+            "2026-08-18 09:41 UTC"
+        );
+        assert_eq!(
+            Locale::En.format_unix_ms_utc(951_827_696_000),
+            "2000-02-29 12:34 UTC"
+        );
+        assert_eq!(Locale::En.format_unix_ms_utc(-1), "1969-12-31 23:59 UTC");
     }
 }

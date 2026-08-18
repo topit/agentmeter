@@ -1,8 +1,10 @@
 use std::path::PathBuf;
 
+use agentmeter_core::SourceHealthState;
 use agentmeter_desktop::{
-    Locale, MessageKey, OverviewLoadErrorKind, OverviewLoadState, OverviewService, OverviewState,
-    Route, ShellState, ThemeMode, ThemePalette,
+    LocalDataErrorKind, Locale, MessageKey, OverviewLoadState, OverviewService, OverviewState,
+    Route, ShellState, SourceCard, SourcesLoadState, SourcesService, SourcesState, ThemeMode,
+    ThemePalette,
 };
 use gpui::{
     AnyElement, App, Bounds, Context, IntoElement, Render, Task, TitlebarOptions, Window,
@@ -32,6 +34,8 @@ struct NavigationShell {
     state: ShellState,
     overview: OverviewState,
     _overview_task: Task<()>,
+    sources: SourcesState,
+    _sources_task: Task<()>,
 }
 
 impl NavigationShell {
@@ -73,10 +77,36 @@ impl NavigationShell {
             .ok();
         });
 
+        let mut sources = SourcesState::default();
+        let request = sources.begin_request();
+        let load = cx.background_executor().spawn(async move {
+            let data_directory = macos_data_directory()?;
+            SourcesService::in_data_directory(data_directory)
+                .load()
+                .map_err(|error| error.kind())
+        });
+        let sources_task = cx.spawn(async move |this, cx| {
+            let result = load.await;
+            this.update(cx, |this, cx| {
+                match result {
+                    Ok(snapshot) => {
+                        this.sources.apply_snapshot(request, snapshot);
+                    }
+                    Err(error) => {
+                        this.sources.apply_error(request, error);
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        });
+
         Self {
             state,
             overview,
             _overview_task: overview_task,
+            sources,
+            _sources_task: sources_task,
         }
     }
 
@@ -151,8 +181,8 @@ impl NavigationShell {
                 .into_any_element(),
             OverviewLoadState::Error(error) => {
                 let message = match error {
-                    OverviewLoadErrorKind::DataDirectory => MessageKey::OverviewDataDirectoryError,
-                    OverviewLoadErrorKind::Database => MessageKey::OverviewDatabaseError,
+                    LocalDataErrorKind::DataDirectory => MessageKey::OverviewDataDirectoryError,
+                    LocalDataErrorKind::Database => MessageKey::OverviewDatabaseError,
                 };
                 div()
                     .mt_6()
@@ -178,6 +208,80 @@ impl NavigationShell {
             }
             OverviewLoadState::Populated | OverviewLoadState::Partial => {
                 self.overview_metrics(palette).into_any_element()
+            }
+        }
+    }
+
+    fn sources_content(&self, palette: ThemePalette) -> AnyElement {
+        let locale = self.state.locale();
+        match self.sources.load_state() {
+            SourcesLoadState::Loading => div()
+                .mt_3()
+                .text_color(rgb(palette.muted_text))
+                .child(locale.text(MessageKey::SourcesLoading))
+                .into_any_element(),
+            SourcesLoadState::Empty => div()
+                .mt_6()
+                .max_w(px(560.0))
+                .p_6()
+                .rounded_lg()
+                .border_1()
+                .border_color(rgb(palette.border))
+                .bg(rgb(palette.surface))
+                .child(
+                    div()
+                        .text_lg()
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .child(locale.text(MessageKey::SourcesEmptyTitle)),
+                )
+                .child(
+                    div()
+                        .mt_2()
+                        .text_color(rgb(palette.muted_text))
+                        .child(locale.text(MessageKey::SourcesEmptyBody)),
+                )
+                .into_any_element(),
+            SourcesLoadState::Error(error) => {
+                let message = match error {
+                    LocalDataErrorKind::DataDirectory => MessageKey::OverviewDataDirectoryError,
+                    LocalDataErrorKind::Database => MessageKey::OverviewDatabaseError,
+                };
+                div()
+                    .mt_6()
+                    .max_w(px(560.0))
+                    .p_6()
+                    .rounded_lg()
+                    .border_1()
+                    .border_color(rgb(palette.border))
+                    .bg(rgb(palette.surface))
+                    .child(
+                        div()
+                            .text_lg()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child(locale.text(MessageKey::SourcesErrorTitle)),
+                    )
+                    .child(
+                        div()
+                            .mt_2()
+                            .text_color(rgb(palette.muted_text))
+                            .child(locale.text(message)),
+                    )
+                    .into_any_element()
+            }
+            SourcesLoadState::Populated => {
+                let snapshot = self
+                    .sources
+                    .snapshot()
+                    .expect("populated sources state must contain a snapshot");
+                div()
+                    .mt_6()
+                    .flex()
+                    .flex_col()
+                    .gap_4()
+                    .children(snapshot.sources.iter().map(|health| {
+                        source_card(SourceCard::from_health(health, locale), locale, palette)
+                    }))
+                    .into_any_element()
             }
         }
     }
@@ -327,6 +431,8 @@ impl Render for NavigationShell {
             .child({
                 let content = if selected == Route::Overview {
                     self.overview_content(palette)
+                } else if selected == Route::Sources {
+                    self.sources_content(palette)
                 } else {
                     div()
                         .mt_3()
@@ -374,11 +480,135 @@ fn metric_card(label: &'static str, value: String, palette: ThemePalette) -> imp
         )
 }
 
-fn macos_data_directory() -> Result<PathBuf, OverviewLoadErrorKind> {
+/// Maps a typed source state to a semantic palette color. The status label is
+/// always rendered next to the color so color is never the only carrier.
+fn status_palette_color(state: SourceHealthState, palette: ThemePalette) -> u32 {
+    match state {
+        SourceHealthState::Healthy => palette.success,
+        SourceHealthState::Partial | SourceHealthState::UnsupportedSchema => palette.warning,
+        SourceHealthState::SetupRequired => palette.info,
+        SourceHealthState::Error => palette.danger,
+        SourceHealthState::Disabled => palette.muted_text,
+    }
+}
+
+fn source_card(card: SourceCard, locale: Locale, palette: ThemePalette) -> impl IntoElement {
+    let status_color = status_palette_color(card.state, palette);
+    div()
+        .max_w(px(760.0))
+        .p_4()
+        .rounded_lg()
+        .border_1()
+        .border_color(rgb(palette.border))
+        .bg(rgb(palette.surface))
+        .flex()
+        .flex_col()
+        .gap_2()
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .gap_3()
+                .items_center()
+                .child(
+                    div()
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .child(card.adapter_id.clone()),
+                )
+                .child(div().flex_1())
+                .child(
+                    div()
+                        .px_2()
+                        .py_1()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(rgb(status_color))
+                        .text_color(rgb(status_color))
+                        .text_sm()
+                        .child(card.status_label),
+                ),
+        )
+        .child(
+            div()
+                .text_sm()
+                .text_color(rgb(palette.muted_text))
+                .child(card.identity.clone()),
+        )
+        .child(
+            div().mt_2().flex().flex_col().gap_1().children(
+                card.detail
+                    .iter()
+                    .map(|(key, value)| detail_row(locale.text(*key), value.clone(), palette)),
+            ),
+        )
+        .children((!card.warnings.is_empty()).then(|| {
+            div()
+                .mt_2()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .child(locale.text(MessageKey::SourcesWarnings)),
+                )
+                .children(card.warnings.iter().map(|warning| {
+                    div()
+                        .text_sm()
+                        .text_color(rgb(palette.muted_text))
+                        .child(warning.clone())
+                }))
+        }))
+        .children(card.error.clone().map(|error| {
+            div()
+                .mt_2()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(rgb(palette.danger))
+                        .child(locale.text(MessageKey::SourcesErrorLabel)),
+                )
+                .child(div().text_sm().text_color(rgb(palette.danger)).child(error))
+        }))
+        .children(card.remediation_label.map(|remediation| {
+            div()
+                .mt_2()
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .child(locale.text(MessageKey::SourcesRemediation)),
+                )
+                .child(div().mt_1().text_sm().child(remediation))
+        }))
+}
+
+fn detail_row(label: &'static str, value: String, palette: ThemePalette) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_row()
+        .gap_2()
+        .child(
+            div()
+                .w(px(180.0))
+                .flex_none()
+                .text_sm()
+                .text_color(rgb(palette.muted_text))
+                .child(label),
+        )
+        .child(div().text_sm().child(value))
+}
+
+fn macos_data_directory() -> Result<PathBuf, LocalDataErrorKind> {
     std::env::var_os("HOME")
         .map(PathBuf::from)
         .map(|home| home.join("Library").join("Application Support"))
-        .ok_or(OverviewLoadErrorKind::DataDirectory)
+        .ok_or(LocalDataErrorKind::DataDirectory)
 }
 
 fn appearance_is_dark(appearance: WindowAppearance) -> bool {

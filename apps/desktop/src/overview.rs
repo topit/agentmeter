@@ -1,4 +1,4 @@
-use agentmeter_app::OverviewLoadErrorKind;
+use agentmeter_app::LocalDataErrorKind;
 use agentmeter_core::{OverviewSnapshot, SourceHealthState};
 
 #[derive(Debug, Eq, PartialEq)]
@@ -11,7 +11,7 @@ pub enum OverviewLoadState {
     Empty,
     Populated,
     Partial,
-    Error(OverviewLoadErrorKind),
+    Error(LocalDataErrorKind),
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -40,7 +40,7 @@ impl OverviewState {
         true
     }
 
-    pub fn apply_error(&mut self, request: OverviewRequest, error: OverviewLoadErrorKind) -> bool {
+    pub fn apply_error(&mut self, request: OverviewRequest, error: LocalDataErrorKind) -> bool {
         if request.0 != self.latest_request {
             return false;
         }
@@ -77,7 +77,7 @@ fn classify_snapshot(snapshot: &OverviewSnapshot) -> OverviewLoadState {
 
 #[cfg(test)]
 mod tests {
-    use agentmeter_app::OverviewLoadErrorKind;
+    use agentmeter_app::LocalDataErrorKind;
     use agentmeter_core::{
         OverviewCostSummary, OverviewDataQuality, OverviewSnapshot, SourceHealth,
         SourceHealthSnapshot, SourceHealthState, SourcePermissionState, TokenBreakdown,
@@ -126,10 +126,10 @@ mod tests {
         assert_eq!(state.load_state(), OverviewLoadState::Partial);
 
         let failed = state.begin_request();
-        assert!(state.apply_error(failed, OverviewLoadErrorKind::Database));
+        assert!(state.apply_error(failed, LocalDataErrorKind::Database));
         assert_eq!(
             state.load_state(),
-            OverviewLoadState::Error(OverviewLoadErrorKind::Database)
+            OverviewLoadState::Error(LocalDataErrorKind::Database)
         );
     }
 
