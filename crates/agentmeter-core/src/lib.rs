@@ -250,6 +250,30 @@ pub struct SourceHealthSnapshot {
     pub sources: Vec<SourceHealth>,
 }
 
+/// Persisted user preferences. Both default to following the system so a
+/// fresh installation never overrides platform locale or appearance.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum LanguagePreference {
+    #[default]
+    System,
+    English,
+    SimplifiedChinese,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum AppearancePreference {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct AppPreferences {
+    pub language: LanguagePreference,
+    pub appearance: AppearancePreference,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct OverviewCostSummary {
     pub provider_reported_usd: Option<NanoUsd>,
@@ -282,7 +306,21 @@ pub struct OverviewSnapshot {
 
 #[cfg(test)]
 mod tests {
-    use super::{NanoUsd, NanoUsdParseError, TokenBreakdown};
+    use super::{
+        AppPreferences, AppearancePreference, LanguagePreference, NanoUsd, NanoUsdParseError,
+        TokenBreakdown,
+    };
+
+    #[test]
+    fn fresh_preferences_follow_the_system() {
+        assert_eq!(
+            AppPreferences::default(),
+            AppPreferences {
+                language: LanguagePreference::System,
+                appearance: AppearancePreference::System,
+            }
+        );
+    }
 
     #[test]
     fn normalized_total_sums_exclusive_buckets() {

@@ -1,10 +1,13 @@
 use std::path::PathBuf;
 
-use agentmeter_core::SourceHealthState;
+use agentmeter_core::{
+    AppPreferences, AppearancePreference, LanguagePreference, SourceHealthState,
+};
 use agentmeter_desktop::{
     LocalDataErrorKind, Locale, MessageKey, OverviewLoadState, OverviewService, OverviewState,
-    Route, ShellState, SourceCard, SourcesLoadState, SourcesService, SourcesState, ThemeMode,
-    ThemePalette,
+    PreferencesService, Route, SettingsLoadState, SettingsState, ShellState, SourceCard,
+    SourcesLoadState, SourcesService, SourcesState, ThemeMode, ThemePalette, appearance_option_key,
+    language_option_key, resolved_locale, resolved_theme_mode,
 };
 use gpui::{
     AnyElement, App, Bounds, Context, IntoElement, Render, Task, TitlebarOptions, Window,
@@ -36,6 +39,9 @@ struct NavigationShell {
     _overview_task: Task<()>,
     sources: SourcesState,
     _sources_task: Task<()>,
+    settings: SettingsState,
+    _settings_task: Task<()>,
+    system_locale: Locale,
 }
 
 impl NavigationShell {
@@ -101,13 +107,74 @@ impl NavigationShell {
             .ok();
         });
 
+        let mut settings = SettingsState::default();
+        let request = settings.begin_load();
+        let load = cx.background_executor().spawn(async move {
+            let data_directory = macos_data_directory()?;
+            PreferencesService::in_data_directory(data_directory)
+                .load()
+                .map_err(|error| error.kind())
+        });
+        let settings_task = cx.spawn(async move |this, cx| {
+            let result = load.await;
+            this.update(cx, |this, cx| {
+                match result {
+                    Ok(preferences) => {
+                        if this.settings.apply_loaded(request, preferences) {
+                            this.apply_preferences_to_shell();
+                        }
+                    }
+                    Err(error) => {
+                        this.settings.apply_load_error(request, error);
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        });
+
         Self {
             state,
             overview,
             _overview_task: overview_task,
             sources,
             _sources_task: sources_task,
+            settings,
+            _settings_task: settings_task,
+            system_locale: locale,
         }
+    }
+
+    fn apply_preferences_to_shell(&mut self) {
+        let Some(preferences) = self.settings.preferences() else {
+            return;
+        };
+        self.state
+            .set_locale(resolved_locale(self.system_locale, preferences.language));
+        self.state
+            .set_theme_mode(resolved_theme_mode(preferences.appearance));
+    }
+
+    /// Persists the complete preference snapshot off the render path. The
+    /// selection has already applied optimistically; the save result only
+    /// records success or a visible, localized failure.
+    fn persist_preferences(&mut self, preferences: AppPreferences, cx: &mut Context<Self>) {
+        let request = self.settings.begin_save();
+        let save = cx.background_executor().spawn(async move {
+            let data_directory = macos_data_directory()?;
+            PreferencesService::in_data_directory(data_directory)
+                .save(preferences)
+                .map_err(|error| error.kind())
+        });
+        cx.spawn(async move |this, cx| {
+            let result = save.await;
+            this.update(cx, |this, cx| {
+                this.settings.apply_save_result(request, result);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn nav_item(
@@ -286,6 +353,163 @@ impl NavigationShell {
         }
     }
 
+    fn settings_content(&self, palette: ThemePalette, cx: &mut Context<Self>) -> AnyElement {
+        let locale = self.state.locale();
+        match self.settings.load_state() {
+            SettingsLoadState::Loading => div()
+                .mt_3()
+                .text_color(rgb(palette.muted_text))
+                .child(locale.text(MessageKey::SettingsLoading))
+                .into_any_element(),
+            SettingsLoadState::Error(error) => {
+                let message = match error {
+                    LocalDataErrorKind::DataDirectory => MessageKey::OverviewDataDirectoryError,
+                    LocalDataErrorKind::Database => MessageKey::OverviewDatabaseError,
+                };
+                div()
+                    .mt_6()
+                    .max_w(px(560.0))
+                    .p_6()
+                    .rounded_lg()
+                    .border_1()
+                    .border_color(rgb(palette.border))
+                    .bg(rgb(palette.surface))
+                    .child(
+                        div()
+                            .text_lg()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child(locale.text(MessageKey::SettingsErrorTitle)),
+                    )
+                    .child(
+                        div()
+                            .mt_2()
+                            .text_color(rgb(palette.muted_text))
+                            .child(locale.text(message)),
+                    )
+                    .into_any_element()
+            }
+            SettingsLoadState::Loaded => {
+                let preferences = self
+                    .settings
+                    .preferences()
+                    .expect("loaded settings state must contain preferences");
+                let mut content = div()
+                    .mt_6()
+                    .max_w(px(560.0))
+                    .flex()
+                    .flex_col()
+                    .gap_4()
+                    .child(
+                        div()
+                            .p_4()
+                            .rounded_lg()
+                            .border_1()
+                            .border_color(rgb(palette.border))
+                            .bg(rgb(palette.surface))
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .child(locale.text(MessageKey::SettingsLanguage)),
+                            )
+                            .child(
+                                div().flex().flex_row().flex_wrap().gap_2().children(
+                                    [
+                                        LanguagePreference::System,
+                                        LanguagePreference::English,
+                                        LanguagePreference::SimplifiedChinese,
+                                    ]
+                                    .into_iter()
+                                    .map(|option| {
+                                        option_control(
+                                            language_option_id(option),
+                                            locale.text(language_option_key(option)),
+                                            preferences.language == option,
+                                            palette,
+                                            move |this, _, _, cx| {
+                                                let Some(mut preferences) =
+                                                    this.settings.preferences()
+                                                else {
+                                                    return;
+                                                };
+                                                preferences.language = option;
+                                                this.settings.select_language(preferences.language);
+                                                this.apply_preferences_to_shell();
+                                                this.persist_preferences(preferences, cx);
+                                            },
+                                            cx,
+                                        )
+                                    }),
+                                ),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .p_4()
+                            .rounded_lg()
+                            .border_1()
+                            .border_color(rgb(palette.border))
+                            .bg(rgb(palette.surface))
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .child(locale.text(MessageKey::SettingsAppearance)),
+                            )
+                            .child(
+                                div().flex().flex_row().flex_wrap().gap_2().children(
+                                    [
+                                        AppearancePreference::System,
+                                        AppearancePreference::Light,
+                                        AppearancePreference::Dark,
+                                    ]
+                                    .into_iter()
+                                    .map(|option| {
+                                        option_control(
+                                            appearance_option_id(option),
+                                            locale.text(appearance_option_key(option)),
+                                            preferences.appearance == option,
+                                            palette,
+                                            move |this, _, _, cx| {
+                                                let Some(mut preferences) =
+                                                    this.settings.preferences()
+                                                else {
+                                                    return;
+                                                };
+                                                preferences.appearance = option;
+                                                this.settings
+                                                    .select_appearance(preferences.appearance);
+                                                this.apply_preferences_to_shell();
+                                                this.persist_preferences(preferences, cx);
+                                            },
+                                            cx,
+                                        )
+                                    }),
+                                ),
+                            ),
+                    );
+                if self.settings.save_error().is_some() {
+                    content = content.child(
+                        div()
+                            .p_4()
+                            .rounded_lg()
+                            .border_1()
+                            .border_color(rgb(palette.danger))
+                            .text_color(rgb(palette.danger))
+                            .child(locale.text(MessageKey::SettingsSaveError)),
+                    );
+                }
+                content.into_any_element()
+            }
+        }
+    }
+
     fn overview_metrics(&self, palette: ThemePalette) -> impl IntoElement {
         let locale = self.state.locale();
         let snapshot = self
@@ -433,6 +657,8 @@ impl Render for NavigationShell {
                     self.overview_content(palette)
                 } else if selected == Route::Sources {
                     self.sources_content(palette)
+                } else if selected == Route::Settings {
+                    self.settings_content(palette, cx)
                 } else {
                     div()
                         .mt_3()
@@ -602,6 +828,67 @@ fn detail_row(label: &'static str, value: String, palette: ThemePalette) -> impl
                 .child(label),
         )
         .child(div().text_sm().child(value))
+}
+
+/// One selectable preference option. Selecting invokes a real
+/// application-service save command, so every rendered control is actionable.
+fn option_control(
+    id: &'static str,
+    label: &'static str,
+    selected: bool,
+    palette: ThemePalette,
+    on_select: impl Fn(
+        &mut NavigationShell,
+        &gpui::ClickEvent,
+        &mut Window,
+        &mut Context<NavigationShell>,
+    ) + 'static,
+    cx: &mut Context<NavigationShell>,
+) -> AnyElement {
+    let item = div()
+        .id(id)
+        .focusable()
+        .tab_stop(true)
+        .role(gpui::Role::Button)
+        .aria_label(label)
+        .px_3()
+        .py_2()
+        .rounded_md()
+        .border_1()
+        .border_color(rgb(if selected {
+            palette.accent
+        } else {
+            palette.border
+        }))
+        .cursor_pointer()
+        .focus_visible(move |style| style.border_2().border_color(rgb(palette.focus_ring)))
+        .on_click(cx.listener(on_select))
+        .child(label);
+    if selected {
+        item.bg(rgb(palette.accent))
+            .text_color(rgb(palette.accent_text))
+            .into_any_element()
+    } else {
+        item.text_color(rgb(palette.text))
+            .hover(move |style| style.bg(rgb(palette.hover)))
+            .into_any_element()
+    }
+}
+
+fn language_option_id(option: LanguagePreference) -> &'static str {
+    match option {
+        LanguagePreference::System => "settings-language-system",
+        LanguagePreference::English => "settings-language-english",
+        LanguagePreference::SimplifiedChinese => "settings-language-chinese",
+    }
+}
+
+fn appearance_option_id(option: AppearancePreference) -> &'static str {
+    match option {
+        AppearancePreference::System => "settings-appearance-system",
+        AppearancePreference::Light => "settings-appearance-light",
+        AppearancePreference::Dark => "settings-appearance-dark",
+    }
 }
 
 fn macos_data_directory() -> Result<PathBuf, LocalDataErrorKind> {

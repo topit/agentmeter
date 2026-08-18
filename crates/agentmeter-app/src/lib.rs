@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use agentmeter_core::{OverviewSnapshot, SourceHealthSnapshot};
+use agentmeter_core::{AppPreferences, OverviewSnapshot, SourceHealthSnapshot};
 use agentmeter_storage::{Database, StorageError};
 
 /// Why a local data service could not produce a snapshot. The kinds are
@@ -53,6 +53,32 @@ impl SourcesService {
     }
 }
 
+/// Loads and persists user preferences in the local database.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PreferencesService {
+    database_path: PathBuf,
+}
+
+impl PreferencesService {
+    pub fn in_data_directory(data_directory: impl AsRef<Path>) -> Self {
+        Self {
+            database_path: local_database_path(data_directory.as_ref()),
+        }
+    }
+
+    pub fn load(&self) -> Result<AppPreferences, LocalDataServiceError> {
+        open_local_database(&self.database_path)?
+            .preferences()
+            .map_err(LocalDataServiceError::Database)
+    }
+
+    pub fn save(&self, preferences: AppPreferences) -> Result<(), LocalDataServiceError> {
+        open_local_database(&self.database_path)?
+            .set_preferences(&preferences)
+            .map_err(LocalDataServiceError::Database)
+    }
+}
+
 #[derive(Debug)]
 pub enum LocalDataServiceError {
     DataDirectory(std::io::Error),
@@ -82,11 +108,14 @@ fn open_local_database(database_path: &Path) -> Result<Database, LocalDataServic
 
 #[cfg(test)]
 mod tests {
-    use agentmeter_core::{SourceHealthState, SourcePermissionState, SourceRemediation};
+    use agentmeter_core::{
+        AppPreferences, AppearancePreference, LanguagePreference, SourceHealthState,
+        SourcePermissionState, SourceRemediation,
+    };
     use agentmeter_storage::{Database, SourceInstallationRegistration, SourceRegistration};
     use tempfile::tempdir;
 
-    use super::{LocalDataErrorKind, OverviewService, SourcesService};
+    use super::{LocalDataErrorKind, OverviewService, PreferencesService, SourcesService};
 
     #[test]
     fn creates_and_loads_the_local_database_for_overview() {
@@ -154,6 +183,44 @@ mod tests {
         );
         assert_eq!(source.state, SourceHealthState::SetupRequired);
         assert_eq!(source.remediation, Some(SourceRemediation::RetryCollection));
+    }
+
+    #[test]
+    fn loads_default_preferences_and_round_trips_a_change() {
+        let directory = tempdir().unwrap();
+        let service = PreferencesService::in_data_directory(directory.path());
+
+        assert_eq!(service.load().unwrap(), AppPreferences::default());
+
+        let preferences = AppPreferences {
+            language: LanguagePreference::SimplifiedChinese,
+            appearance: AppearancePreference::Dark,
+        };
+        service.save(preferences).unwrap();
+
+        assert_eq!(
+            PreferencesService::in_data_directory(directory.path())
+                .load()
+                .unwrap(),
+            preferences,
+            "preferences must survive a fresh service and connection"
+        );
+    }
+
+    #[test]
+    fn classifies_a_preferences_data_directory_failure() {
+        let directory = tempdir().unwrap();
+        std::fs::write(directory.path().join("AgentMeter"), b"not a directory").unwrap();
+        let service = PreferencesService::in_data_directory(directory.path());
+
+        assert_eq!(
+            service.load().unwrap_err().kind(),
+            LocalDataErrorKind::DataDirectory
+        );
+        assert_eq!(
+            service.save(AppPreferences::default()).unwrap_err().kind(),
+            LocalDataErrorKind::DataDirectory
+        );
     }
 
     #[test]

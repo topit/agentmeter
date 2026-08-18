@@ -1,6 +1,6 @@
 # AgentMeter product and engineering plan
 
-- Status: M3 GPUI application shell in progress; overview and sources views implemented
+- Status: M3 implementation complete (shell, overview, sources, settings); native visual acceptance pending Metal Toolchain repair
 - Product name: AgentMeter
 - Primary platform: macOS
 - Future platform: Windows
@@ -499,4 +499,4 @@ These decisions do not block M1 but should be settled before macOS beta:
 
 ## 19. Immediate next implementation step
 
-Continue from the handoff in `docs/STATUS.md`: M3-04 Sources presentation is complete. Build M3-05 Settings presentation: language and appearance preference controls persisted through the application service with portable tests and no filesystem work on the render path. Native shell, Overview, and Sources acceptance remains required before M3 exits; rerun the full locale/theme matrix after the Mac has a working Metal Toolchain.
+M3 implementation is complete (shell, Overview, Sources, Settings). The next step is operational, not code: repair the Mac's Metal Toolchain (macOS update plus restart if required, then `xcodebuild -runFirstLaunch`, `xcodebuild -downloadComponent MetalToolchain`, `xcrun metal --version`), build and launch the app with production features, and run the M3 exit matrix — navigation, keyboard focus and accessibility, Overview/Sources/Settings states, both locales and both themes. After M3 exits, start M4 with the Kimi/Kimi Code adapter per the source roadmap.

@@ -16,7 +16,7 @@ Every commit must include the corresponding update to this file: task status, de
 
 ## Operational reality
 
-- Base revision: `7e66bc9` (`Document the development handoff`)
+- Base revision: `3898451` (`Render source health in the Sources view`)
 - Branch: `main`, tracking GitHub `origin/main` at `topit/agentmeter`; M1, M2, and M3-01 through M3-03 have been pushed
 - The earlier Amp-hosted remote is no longer configured in this checkout; pushes go to `origin`
 - Toolchain: Rust 1.96.0; repository checks are defined in `AGENTS.md`
@@ -47,7 +47,8 @@ Every commit must include the corresponding update to this file: task status, de
 | M3-01 GPUI window shell | coordinator | `eb161d5` | tested GPUI revision | pushed; macOS validation blocked | macOS compile; locale/theme shell tests; representative UI verification | committed and pushed as `eddbcbf`; native build is blocked by the runner's missing Metal Toolchain |
 | M3-02 Overview snapshot | coordinator | `eddbcbf` | portable shell and aggregate queries | pushed | snapshot-generation tests; async stale-result tests; workspace checks | committed and pushed as `a6d6002` |
 | M3-03 Overview presentation | coordinator | `a6d6002` | immutable overview snapshot | pushed; native visual validation pending | off-render-path loading tests; localized state tests; representative UI verification | committed and pushed as `ec266ee`; runtime visual matrix remains blocked by the Metal Toolchain |
-| M3-04 Sources presentation | coordinator | `ec266ee` | source-health snapshots | completed | localized remediation-state tests; stale-result tests; representative UI verification | Sources view implemented from immutable snapshots with both-locale coverage; the next task reconciles this row with the actual commit and push |
+| M3-04 Sources presentation | coordinator | `ec266ee` | source-health snapshots | pushed | localized remediation-state tests; stale-result tests; representative UI verification | committed and pushed as `3898451`; native visual validation remains blocked by the missing Metal Toolchain |
+| M3-05 Settings presentation | coordinator | `3898451` | preferences persistence contract | completed | preference round-trip tests; persistence and stale-save tests; workspace checks | Settings implemented with optimistic selection and background persistence; the next task reconciles this row with the actual commit and push |
 
 ## Verification contract
 
@@ -222,28 +223,41 @@ Every commit must include the corresponding update to this file: task status, de
 - Tests: 95 total (86 unit tests and 9 collector-to-storage integration tests). Sources state, card localization, service success/failure, and both-locale label coverage are covered portably; GPUI layout was type-checked but not launched.
 - `cargo fmt --all --check`, `cargo check --workspace --all-targets`, `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, and `git diff --check` passed on the user's Apple Silicon Mac after temporarily adding `runtime_shaders` to `gpui_platform` locally; the bypass was reverted before committing and the committed dependency remains production `font-kit`. Native launch and the light/dark English/Chinese visual matrix remain blocked by the missing Metal Toolchain.
 
+## M3-05 verification evidence
+
+- `agentmeter-core` adds `LanguagePreference`, `AppearancePreference`, and `AppPreferences` with system-following defaults. Storage persists one JSON document under the existing v1 `preferences` key-value table — the table was already reserved in schema v1, so no schema migration was required and `SCHEMA_VERSION` stays 1. Unknown or malformed stored values surface as `InvalidPreference` errors instead of silently becoming defaults; storage tests cover defaults, cross-connection round-trips, and both corruption shapes.
+- `agentmeter-app` adds `PreferencesService` load/save sharing the local-database lifecycle and `LocalDataErrorKind` classification; service tests cover round-trips across fresh connections and data-directory failure for both operations.
+- Desktop `SettingsState` applies selections optimistically (immediate repaint, no restart), rejects out-of-order load and save completions through single-use request generations, clears the save error on each new attempt, and records only fresh failures. Saves persist the complete preference snapshot, so rapid consecutive selections stay last-write-wins. Portable tests cover stale load/error rejection, stale save rejection, optimistic selection, pre-load selection, and language/appearance resolution.
+- The Settings route renders language (System / English / 简体中文, language names shown natively in both UI locales by convention) and appearance (System / Light / Dark) options as real buttons that invoke the `PreferencesService` save command on the background executor — no inert controls. Load failures classify as localized data-directory/database errors and save failures render a localized danger banner. Persisted preferences apply at startup and repaint existing windows live.
+- Every new key ships with English and Simplified Chinese text in the same change.
+- Tests: 106 total (97 unit tests and 9 collector-to-storage integration tests).
+- `cargo fmt --all --check`, `cargo check --workspace --all-targets`, `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, and `git diff --check` passed on the user's Apple Silicon Mac with the temporary local-only `runtime_shaders` bypass, which was reverted before committing; the committed dependency remains production `font-kit`. Native launch and the visual matrix remain blocked by the missing Metal Toolchain.
+
 ## Development handoff
 
-Handoff point: the M3-04 Sources presentation commit on GitHub `topit/agentmeter`, branch `main`, written directly after `7e66bc9`. The worktree was clean before this change; the next task reconciles the M3-04 ledger row with the actual commit hash and push result.
+Handoff point: the M3-05 Settings presentation commit on GitHub `topit/agentmeter`, branch `main`, written directly after `3898451`. The worktree was clean before this change; the next task reconciles the M3-05 ledger row with the actual commit hash and push result.
 
 ### Product and implementation state
 
 - M1 and M2 are complete. The canonical SQLite ledger, reference ingestion contracts, Amp/Codex/Pi collectors, source-health model, provider-reported costs, reconciliation reports, Codex compressed rollouts, and Pi legacy/current discovery are implemented with synthetic fixture coverage.
-- M3-01 through M3-04 are implemented. GPUI is pinned to Zed revision `c24358d96cdb4ce14ecbc088462295353b0103f0`; the macOS shell, portable navigation/theme/locale state, immutable Overview and Sources queries with stale-response gates, the application-service boundary, and localized Overview and Sources states are present.
-- The next bounded task is M3-05 Settings presentation (language and appearance preferences persisted through the application service). Do not start additional collectors or M4 until Settings and the remaining M3 acceptance work are complete.
+- M3 implementation is complete (M3-01 through M3-05). GPUI is pinned to Zed revision `c24358d96cdb4ce14ecbc088462295353b0103f0`; the macOS shell, portable navigation/theme/locale state, immutable Overview/Sources/preferences queries with stale-response gates, the application-service boundary, and localized Overview, Sources, and Settings states are present. Preferences persist across relaunch and repaint live.
+- The only remaining M3 exit work is native visual acceptance, which is blocked on the user's Mac by the missing Metal Toolchain (the user asked to surface this once M3 implementation completed). Do not start M4 collectors before M3 exits.
 
 ### Ownership map for the next task
 
-- `crates/agentmeter-core/src/lib.rs`: portable domain contracts, including `SourceHealth`, `SourceHealthSnapshot`, typed states, permissions, and remediation.
-- `crates/agentmeter-storage/src/lib.rs`: `Database::source_health_snapshot()` constructs deterministic immutable snapshots; the planned `preferences` table from `docs/PLAN.md` section 6 is the natural persistence target for M3-05.
-- `crates/agentmeter-app/src/lib.rs`: application-service boundary for the local database lifecycle (`LocalDataErrorKind`/`LocalDataServiceError`) with `OverviewService` and `SourcesService`. Add preferences loading/saving here rather than opening SQLite from GPUI or desktop presentation state.
-- `apps/desktop/src/overview.rs` and `apps/desktop/src/sources.rs`: reference patterns for single-use request generations, stale completion rejection, and loading/empty/partial/error classification; `sources.rs` also shows the localized card view-model pattern.
-- `apps/desktop/src/i18n.rs`: typed exhaustive English and Simplified Chinese catalog, including permission and UTC timestamp helpers. Add every Settings label and preference name to both locales in the same change.
-- `apps/desktop/src/gpui_app.rs`: current shell with Overview and Sources rendering. Keep filesystem/database work on `background_executor`; apply immutable results through the entity context. Views must use `ThemePalette` semantic tokens, including the new status colors, not literal colors.
+- `crates/agentmeter-core/src/lib.rs`: portable domain contracts, including `SourceHealth`, `SourceHealthSnapshot`, typed states, permissions, remediation, and `AppPreferences`.
+- `crates/agentmeter-storage/src/lib.rs`: `Database::source_health_snapshot()` and `Database::preferences()`/`set_preferences()`; preferences live in the v1 key-value `preferences` table as one JSON document under the `app_preferences` key.
+- `crates/agentmeter-app/src/lib.rs`: application-service boundary for the local database lifecycle (`LocalDataErrorKind`/`LocalDataServiceError`) with `OverviewService`, `SourcesService`, and `PreferencesService`. All filesystem and database work belongs here, never in GPUI or desktop presentation state.
+- `apps/desktop/src/overview.rs`, `sources.rs`, and `settings.rs`: reference patterns for single-use request generations, stale completion rejection, optimistic selection, and loading/empty/partial/error classification.
+- `apps/desktop/src/i18n.rs`: typed exhaustive English and Simplified Chinese catalog, including permission, preference-option, and UTC timestamp helpers.
+- `apps/desktop/src/gpui_app.rs`: the shell with Overview, Sources, and Settings rendering. Keep filesystem/database work on `background_executor`; apply results through the entity context. Views must use `ThemePalette` semantic tokens, not literal colors.
 
-### M3-05 completion target
+### Remaining M3 exit work: native acceptance
 
-Implement a Settings route that lets the user pick language (system, English, Simplified Chinese) and appearance (system, light, dark), persisting through an application-service preferences command so choices survive relaunch. Keep persistence off the render path, localize every label in English and Simplified Chinese, and add portable tests for preference state transitions, persistence round-trips, and service failure classification. Preference changes must repaint existing windows and must not require a restart unless proven unavoidable.
+1. With the user's authorization, repair the Mac toolchain: update macOS and restart if required, then `xcodebuild -runFirstLaunch`, `xcodebuild -downloadComponent MetalToolchain`, and confirm `xcrun metal --version` succeeds.
+2. Build and launch with production features (no `runtime_shaders` bypass): `cargo run -p agentmeter-desktop`.
+3. Verify navigation, keyboard focus and accessibility labels, Overview/Sources/Settings states, live preference switching, and the full English/Chinese × light/dark matrix. Record the evidence in this file and mark M3 exited in `docs/PLAN.md`.
+4. After M3 exits, start M4-01 (Kimi/Kimi Code adapter) per the source roadmap in `docs/PLAN.md` section 7.
 
 ### Required verification and macOS limitation
 
@@ -257,15 +271,15 @@ cargo clippy --workspace --all-targets -- -D warnings
 git diff --check
 ```
 
-The M3-04 candidate passed all gates on the user's Apple Silicon Mac after temporarily adding `runtime_shaders` to `gpui_platform` locally; the bypass was reverted before committing and must never be committed as a substitute for production shader compilation.
+The M3-04 and M3-05 candidates passed all gates on the user's Apple Silicon Mac after temporarily adding `runtime_shaders` to `gpui_platform` locally; the bypass was reverted before each commit and must never be committed as a substitute for production shader compilation.
 
-Native launch and visual acceptance remain blocked on the user's Mac: the Metal Toolchain is absent (`xcrun metal --version` still fails). Repair likely requires updating macOS and restarting, then running `xcodebuild -runFirstLaunch`, `xcodebuild -downloadComponent MetalToolchain`, and `xcrun metal --version`. Treat system update/restart as user-approved work only when explicitly authorized. After repair, build and launch with production features and verify navigation, keyboard focus/accessibility, Overview and Sources states in English/Chinese and light/dark modes.
+Native launch and visual acceptance remain blocked on the user's Mac: the Metal Toolchain is absent (`xcrun metal --version` still fails). Repair likely requires updating macOS and restarting, then running `xcodebuild -runFirstLaunch`, `xcodebuild -downloadComponent MetalToolchain`, and `xcrun metal --version`. Treat system update/restart as user-approved work only when explicitly authorized.
 
 ### Workflow constraints
 
-- Reconcile the preceding ledger row with its actual commit at the start of every task; M3-03 was reconciled to `ec266ee`, and M3-04 still needs reconciliation.
+- Reconcile the preceding ledger row with its actual commit at the start of every task; M3-04 was reconciled to `3898451`, and M3-05 still needs reconciliation.
 - Update this file before every commit. Update `docs/PLAN.md` in the same commit whenever scope, roadmap order, acceptance criteria, or the immediate next step changes.
-- Commit each completed step and push only to GitHub `main`. In this checkout the GitHub remote is named `origin` (`git@github.com:topit/agentmeter.git`); the earlier Amp-hosted remote is no longer configured.
+- Commit each completed step and push only to GitHub `main`. In this checkout the GitHub remote is named `origin` (`git@github.com:topit/agentmeter.git`); port-22 SSH hangs on this network, so push through `ssh://git@ssh.github.com:443/topit/agentmeter.git` until the proxy forwards port 22.
 - Use synthetic fixtures only. Never read or commit real agent histories, prompts, responses, tool payloads, account IDs, secrets, or real home paths.
 - Do not call a client supported until every acceptance criterion in `docs/PLAN.md` is met.
 

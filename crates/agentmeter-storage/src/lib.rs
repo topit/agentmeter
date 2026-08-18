@@ -3,12 +3,13 @@
 use std::{collections::BTreeMap, path::Path};
 
 use agentmeter_core::{
-    CostFact, CostKind, DataConfidence, NanoUsd, OverviewCostSummary, OverviewDataQuality,
-    OverviewSnapshot, SourceHealth, SourceHealthSnapshot, SourceHealthState, SourcePermissionState,
-    SourceRemediation, TimestampOrigin, TokenBreakdown, UsageEvent, UsageRecord,
+    AppPreferences, AppearancePreference, CostFact, CostKind, DataConfidence, LanguagePreference,
+    NanoUsd, OverviewCostSummary, OverviewDataQuality, OverviewSnapshot, SourceHealth,
+    SourceHealthSnapshot, SourceHealthState, SourcePermissionState, SourceRemediation,
+    TimestampOrigin, TokenBreakdown, UsageEvent, UsageRecord,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 pub const SCHEMA_VERSION: u32 = 1;
@@ -171,6 +172,8 @@ pub enum StorageError {
     ReconciliationOverflow,
     #[error("usage or cost totals overflowed while building an overview snapshot")]
     OverviewOverflow,
+    #[error("stored {field} preference has an unsupported value: {value}")]
+    InvalidPreference { field: &'static str, value: String },
     #[error("failed to serialize diagnostics: {0}")]
     Diagnostics(#[from] serde_json::Error),
 }
@@ -976,6 +979,93 @@ impl Database {
         Ok(self
             .connection
             .pragma_query_value(None, "journal_mode", |row| row.get(0))?)
+    }
+
+    /// Reads persisted user preferences. A database that has never stored a
+    /// preference row reports the system-following defaults rather than an
+    /// error; an unrecognized stored value is surfaced as one.
+    pub fn preferences(&self) -> Result<AppPreferences> {
+        let Some(value_json) = self
+            .connection
+            .query_row(
+                "SELECT value_json FROM preferences WHERE key = ?1",
+                params![PREFERENCES_KEY],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+        else {
+            return Ok(AppPreferences::default());
+        };
+        let stored: StoredPreferences =
+            serde_json::from_str(&value_json).map_err(|_| StorageError::InvalidPreference {
+                field: "app_preferences",
+                value: value_json.clone(),
+            })?;
+        Ok(AppPreferences {
+            language: parse_language_preference(&stored.language)?,
+            appearance: parse_appearance_preference(&stored.appearance)?,
+        })
+    }
+
+    pub fn set_preferences(&self, preferences: &AppPreferences) -> Result<()> {
+        let stored = StoredPreferences {
+            language: language_preference_str(preferences.language).to_owned(),
+            appearance: appearance_preference_str(preferences.appearance).to_owned(),
+        };
+        self.connection.execute(
+            "INSERT INTO preferences (key, value_json) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json",
+            params![PREFERENCES_KEY, serde_json::to_string(&stored)?],
+        )?;
+        Ok(())
+    }
+}
+
+const PREFERENCES_KEY: &str = "app_preferences";
+
+#[derive(Deserialize, Serialize)]
+struct StoredPreferences {
+    language: String,
+    appearance: String,
+}
+
+fn language_preference_str(language: LanguagePreference) -> &'static str {
+    match language {
+        LanguagePreference::System => "system",
+        LanguagePreference::English => "en",
+        LanguagePreference::SimplifiedChinese => "zh-cn",
+    }
+}
+
+fn parse_language_preference(value: &str) -> Result<LanguagePreference> {
+    match value {
+        "system" => Ok(LanguagePreference::System),
+        "en" => Ok(LanguagePreference::English),
+        "zh-cn" => Ok(LanguagePreference::SimplifiedChinese),
+        _ => Err(StorageError::InvalidPreference {
+            field: "language",
+            value: value.to_owned(),
+        }),
+    }
+}
+
+fn appearance_preference_str(appearance: AppearancePreference) -> &'static str {
+    match appearance {
+        AppearancePreference::System => "system",
+        AppearancePreference::Light => "light",
+        AppearancePreference::Dark => "dark",
+    }
+}
+
+fn parse_appearance_preference(value: &str) -> Result<AppearancePreference> {
+    match value {
+        "system" => Ok(AppearancePreference::System),
+        "light" => Ok(AppearancePreference::Light),
+        "dark" => Ok(AppearancePreference::Dark),
+        _ => Err(StorageError::InvalidPreference {
+            field: "appearance",
+            value: value.to_owned(),
+        }),
     }
 }
 
@@ -1817,8 +1907,8 @@ fn nonempty(value: String) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use agentmeter_core::{
-        CostFact, CostKind, DataConfidence, EventProvenance, NanoUsd, TimestampOrigin,
-        TokenBreakdown, UsageEvent, UsageRecord,
+        AppPreferences, AppearancePreference, CostFact, CostKind, DataConfidence, EventProvenance,
+        LanguagePreference, NanoUsd, TimestampOrigin, TokenBreakdown, UsageEvent, UsageRecord,
     };
     use rusqlite::params;
     use tempfile::tempdir;
@@ -1850,6 +1940,69 @@ mod tests {
 
         let error = database.migrate().unwrap_err();
         assert!(matches!(error, StorageError::NewerSchema { .. }));
+    }
+
+    #[test]
+    fn fresh_database_reports_system_default_preferences() {
+        let database = Database::open_in_memory().unwrap();
+
+        assert_eq!(database.schema_version().unwrap(), SCHEMA_VERSION);
+        assert_eq!(database.preferences().unwrap(), AppPreferences::default());
+    }
+
+    #[test]
+    fn preferences_round_trip_across_connections() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("agentmeter.db");
+        let preferences = AppPreferences {
+            language: LanguagePreference::SimplifiedChinese,
+            appearance: AppearancePreference::Dark,
+        };
+
+        Database::open(&path)
+            .unwrap()
+            .set_preferences(&preferences)
+            .unwrap();
+        let reloaded = Database::open(&path).unwrap().preferences().unwrap();
+
+        assert_eq!(reloaded, preferences);
+    }
+
+    #[test]
+    fn rejects_unknown_or_malformed_stored_preferences() {
+        let database = Database::open_in_memory().unwrap();
+        database
+            .connection
+            .execute(
+                "INSERT INTO preferences (key, value_json)
+                 VALUES ('app_preferences', '{\"language\":\"klingon\",\"appearance\":\"dark\"}')",
+                [],
+            )
+            .unwrap();
+        assert!(matches!(
+            database.preferences().unwrap_err(),
+            StorageError::InvalidPreference {
+                field: "language",
+                ..
+            }
+        ));
+
+        let database = Database::open_in_memory().unwrap();
+        database
+            .connection
+            .execute(
+                "INSERT INTO preferences (key, value_json)
+                 VALUES ('app_preferences', 'not json')",
+                [],
+            )
+            .unwrap();
+        assert!(matches!(
+            database.preferences().unwrap_err(),
+            StorageError::InvalidPreference {
+                field: "app_preferences",
+                ..
+            }
+        ));
     }
 
     #[test]

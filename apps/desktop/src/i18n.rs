@@ -1,4 +1,7 @@
-use agentmeter_core::{NanoUsd, SourceHealthState, SourcePermissionState, SourceRemediation};
+use agentmeter_core::{
+    AppearancePreference, LanguagePreference, NanoUsd, SourceHealthState, SourcePermissionState,
+    SourceRemediation,
+};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum Locale {
@@ -88,6 +91,19 @@ impl Locale {
             (Self::En, MessageKey::PermissionGranted) => "Granted",
             (Self::En, MessageKey::PermissionDenied) => "Denied",
             (Self::En, MessageKey::PermissionMissing) => "Missing",
+            (Self::En, MessageKey::SettingsLoading) => "Loading settings…",
+            (Self::En, MessageKey::SettingsErrorTitle) => "Settings unavailable",
+            (Self::En, MessageKey::SettingsLanguage) => "Language",
+            (Self::En, MessageKey::SettingsLanguageSystem) => "System",
+            (Self::En, MessageKey::SettingsLanguageEnglish) => "English",
+            (Self::En, MessageKey::SettingsLanguageChinese) => "简体中文",
+            (Self::En, MessageKey::SettingsAppearance) => "Appearance",
+            (Self::En, MessageKey::SettingsThemeSystem) => "System",
+            (Self::En, MessageKey::SettingsThemeLight) => "Light",
+            (Self::En, MessageKey::SettingsThemeDark) => "Dark",
+            (Self::En, MessageKey::SettingsSaveError) => {
+                "AgentMeter could not save this preference."
+            }
             (Self::ZhCn, MessageKey::AppSubtitle) => "本地 Agent 用量",
             (Self::ZhCn, MessageKey::ShellPlaceholder) => {
                 "本地数据快照可用后，用量视图将在这里显示。"
@@ -155,6 +171,17 @@ impl Locale {
             (Self::ZhCn, MessageKey::PermissionGranted) => "已授权",
             (Self::ZhCn, MessageKey::PermissionDenied) => "已拒绝",
             (Self::ZhCn, MessageKey::PermissionMissing) => "缺失",
+            (Self::ZhCn, MessageKey::SettingsLoading) => "正在加载设置…",
+            (Self::ZhCn, MessageKey::SettingsErrorTitle) => "设置暂不可用",
+            (Self::ZhCn, MessageKey::SettingsLanguage) => "语言",
+            (Self::ZhCn, MessageKey::SettingsLanguageSystem) => "跟随系统",
+            (Self::ZhCn, MessageKey::SettingsLanguageEnglish) => "English",
+            (Self::ZhCn, MessageKey::SettingsLanguageChinese) => "简体中文",
+            (Self::ZhCn, MessageKey::SettingsAppearance) => "外观",
+            (Self::ZhCn, MessageKey::SettingsThemeSystem) => "跟随系统",
+            (Self::ZhCn, MessageKey::SettingsThemeLight) => "浅色",
+            (Self::ZhCn, MessageKey::SettingsThemeDark) => "深色",
+            (Self::ZhCn, MessageKey::SettingsSaveError) => "AgentMeter 无法保存此偏好设置。",
         }
     }
 
@@ -249,6 +276,17 @@ pub enum MessageKey {
     PermissionGranted,
     PermissionDenied,
     PermissionMissing,
+    SettingsLoading,
+    SettingsErrorTitle,
+    SettingsLanguage,
+    SettingsLanguageSystem,
+    SettingsLanguageEnglish,
+    SettingsLanguageChinese,
+    SettingsAppearance,
+    SettingsThemeSystem,
+    SettingsThemeLight,
+    SettingsThemeDark,
+    SettingsSaveError,
 }
 
 pub fn health_state_key(state: SourceHealthState) -> MessageKey {
@@ -281,6 +319,22 @@ pub fn permission_key(permission: SourcePermissionState) -> MessageKey {
     }
 }
 
+pub fn language_option_key(language: LanguagePreference) -> MessageKey {
+    match language {
+        LanguagePreference::System => MessageKey::SettingsLanguageSystem,
+        LanguagePreference::English => MessageKey::SettingsLanguageEnglish,
+        LanguagePreference::SimplifiedChinese => MessageKey::SettingsLanguageChinese,
+    }
+}
+
+pub fn appearance_option_key(appearance: AppearancePreference) -> MessageKey {
+    match appearance {
+        AppearancePreference::System => MessageKey::SettingsThemeSystem,
+        AppearancePreference::Light => MessageKey::SettingsThemeLight,
+        AppearancePreference::Dark => MessageKey::SettingsThemeDark,
+    }
+}
+
 /// Splits a Unix millisecond instant into UTC calendar parts. Uses the
 /// floor-division civil-date algorithm so negative instants stay correct.
 fn utc_civil(unix_ms: i64) -> (i64, u32, u32, u32, u32) {
@@ -303,9 +357,15 @@ fn utc_civil(unix_ms: i64) -> (i64, u32, u32, u32, u32) {
 
 #[cfg(test)]
 mod tests {
-    use agentmeter_core::{NanoUsd, SourceHealthState, SourcePermissionState, SourceRemediation};
+    use agentmeter_core::{
+        AppearancePreference, LanguagePreference, NanoUsd, SourceHealthState,
+        SourcePermissionState, SourceRemediation,
+    };
 
-    use super::{Locale, MessageKey, health_state_key, permission_key, remediation_key};
+    use super::{
+        Locale, MessageKey, appearance_option_key, health_state_key, language_option_key,
+        permission_key, remediation_key,
+    };
 
     #[test]
     fn selects_chinese_for_common_language_tags() {
@@ -422,6 +482,51 @@ mod tests {
             assert!(!Locale::En.text(key).is_empty());
             assert!(!Locale::ZhCn.text(key).is_empty());
             assert_ne!(Locale::En.text(key), Locale::ZhCn.text(key));
+        }
+    }
+
+    #[test]
+    fn localizes_every_settings_label_and_option() {
+        for key in [
+            MessageKey::SettingsLoading,
+            MessageKey::SettingsErrorTitle,
+            MessageKey::SettingsLanguage,
+            MessageKey::SettingsLanguageSystem,
+            MessageKey::SettingsAppearance,
+            MessageKey::SettingsThemeSystem,
+            MessageKey::SettingsThemeLight,
+            MessageKey::SettingsThemeDark,
+            MessageKey::SettingsSaveError,
+        ] {
+            assert!(!Locale::En.text(key).is_empty());
+            assert!(!Locale::ZhCn.text(key).is_empty());
+            assert_ne!(Locale::En.text(key), Locale::ZhCn.text(key));
+        }
+        // Language names render in their own language in every UI locale.
+        for key in [
+            MessageKey::SettingsLanguageEnglish,
+            MessageKey::SettingsLanguageChinese,
+        ] {
+            assert!(!Locale::En.text(key).is_empty());
+            assert_eq!(Locale::En.text(key), Locale::ZhCn.text(key));
+        }
+        for language in [
+            LanguagePreference::System,
+            LanguagePreference::English,
+            LanguagePreference::SimplifiedChinese,
+        ] {
+            let key = language_option_key(language);
+            assert!(!Locale::En.text(key).is_empty());
+            assert!(!Locale::ZhCn.text(key).is_empty());
+        }
+        for appearance in [
+            AppearancePreference::System,
+            AppearancePreference::Light,
+            AppearancePreference::Dark,
+        ] {
+            let key = appearance_option_key(appearance);
+            assert!(!Locale::En.text(key).is_empty());
+            assert!(!Locale::ZhCn.text(key).is_empty());
         }
     }
 
