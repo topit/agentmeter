@@ -25,6 +25,7 @@ The first implementation wave targets Amp, Codex CLI, Pi, Kimi/Kimi Code, Factor
 
 ```text
 apps/desktop              GPUI desktop shell, localization, themes
+crates/agentmeter-app          application services and background queries
 crates/agentmeter-core         normalized domain model
 crates/agentmeter-collectors   source discovery and adapter contracts
 crates/agentmeter-storage      SQLite event ledger and aggregate queries

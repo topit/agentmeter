@@ -24,12 +24,13 @@ The product is macOS-first and GPUI-based. Keep collection, domain, storage, and
 ## Workspace boundaries
 
 - `apps/desktop`: presentation state, GPUI views, localization, themes, and user interaction.
+- `crates/agentmeter-app`: application orchestration and immutable query services; no GPUI or source-specific parsing.
 - `crates/agentmeter-core`: platform-independent domain types and normalization invariants.
 - `crates/agentmeter-collectors`: discovery and source-specific parsing/reconciliation.
 - `crates/agentmeter-storage`: SQLite migrations, repositories, and aggregate queries.
 - `crates/agentmeter-pricing`: pricing datasets, matching, confidence, and repricing.
 
-Dependencies must point inward: desktop may depend on core services; core crates must never depend on GPUI. Agent-specific formats belong in collectors, not in storage or views.
+Dependencies must point inward: desktop may depend on application and core services; core crates must never depend on GPUI. Agent-specific formats belong in collectors, not in storage or views.
 
 ## Required checks
 

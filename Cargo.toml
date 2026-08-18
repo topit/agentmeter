@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "apps/desktop",
+  "crates/agentmeter-app",
   "crates/agentmeter-collectors",
   "crates/agentmeter-core",
   "crates/agentmeter-pricing",

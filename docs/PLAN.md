@@ -87,6 +87,7 @@ The product should answer:
 ### Crate responsibilities
 
 - `agentmeter-core`: stable domain vocabulary, normalization invariants, source/client/provider/model identities.
+- `agentmeter-app`: application orchestration, local data lifecycle, background work boundaries, and immutable query services.
 - `agentmeter-collectors`: platform discovery and adapter-specific parsing, reconciliation, cursor state, and warnings.
 - `agentmeter-storage`: SQLite migrations, transactional source ownership, event queries, and materialized projections.
 - `agentmeter-pricing`: rate dataset cache, model matching, reported cost, estimates, and repricing.
@@ -498,4 +499,4 @@ These decisions do not block M1 but should be settled before macOS beta:
 
 ## 19. Immediate next implementation step
 
-Add the application-service boundary that loads Overview snapshots away from GPUI rendering, then render localized loading, empty, populated, partial-data, and error states from accepted immutable snapshots. Native shell acceptance remains required before M3 exits; rerun macOS verification after the runner has a working Metal Toolchain.
+Build the Sources view from immutable source-health snapshots, with localized status, remediation, empty, loading, and error states and no filesystem work on the render path. Native Overview and shell acceptance remain required before M3 exits; rerun the full locale/theme matrix after the macOS runner has a working Metal Toolchain.

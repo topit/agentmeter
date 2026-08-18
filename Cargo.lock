@@ -130,6 +130,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "agentmeter-app"
+version = "0.1.0"
+dependencies = [
+ "agentmeter-core",
+ "agentmeter-storage",
+ "tempfile",
+]
+
+[[package]]
 name = "agentmeter-collectors"
 version = "0.1.0"
 dependencies = [
@@ -150,6 +159,7 @@ version = "0.1.0"
 name = "agentmeter-desktop"
 version = "0.1.0"
 dependencies = [
+ "agentmeter-app",
  "agentmeter-core",
  "gpui",
  "gpui_platform",

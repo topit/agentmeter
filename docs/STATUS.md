@@ -16,8 +16,8 @@ Every commit must include the corresponding update to this file: task status, de
 
 ## Operational reality
 
-- Base revision: `eddbcbf` (`Add the GPUI navigation shell`)
-- Branch: `main`, tracking GitHub `github/main`; M1, M2, and the M3-01 implementation have been pushed
+- Base revision: `a6d6002` (`Add immutable overview snapshots`)
+- Branch: `main`, tracking GitHub `github/main`; M1, M2, and M3-01 through M3-02 have been pushed
 - Additional remote: Amp-hosted `origin` remains read-only for this work
 - Amp project and `origin` still use `moeit/token-usage` pending a Puck-managed rename
 - Toolchain: Rust 1.96.0; repository checks are defined in `AGENTS.md`
@@ -46,8 +46,9 @@ Every commit must include the corresponding update to this file: task status, de
 | M2-07 Reconciliation report | coordinator | `8080c26` | complete collector facts | pushed | deterministic reconciliation/cross-check fixtures; workspace checks | committed and pushed as `e5d77ee` |
 | M2-08 Variant assessment | coordinator | `e5d77ee` | upstream Codex/Pi contracts | pushed | official-source evidence; variant fixtures where supported; workspace checks | committed and pushed as `eb161d5` |
 | M3-01 GPUI window shell | coordinator | `eb161d5` | tested GPUI revision | pushed; macOS validation blocked | macOS compile; locale/theme shell tests; representative UI verification | committed and pushed as `eddbcbf`; native build is blocked by the runner's missing Metal Toolchain |
-| M3-02 Overview snapshot | coordinator | `eddbcbf` | portable shell and aggregate queries | completed | snapshot-generation tests; async stale-result tests; workspace checks | immutable headline query and stale-response gate implemented; ready to commit and push |
-| M3-03 Overview presentation | coordinator | M3-02 commit | immutable overview snapshot | queued | off-render-path loading tests; localized state tests; representative UI verification | load snapshots through an application service and render overview states |
+| M3-02 Overview snapshot | coordinator | `eddbcbf` | portable shell and aggregate queries | pushed | snapshot-generation tests; async stale-result tests; workspace checks | committed and pushed as `a6d6002` |
+| M3-03 Overview presentation | coordinator | `a6d6002` | immutable overview snapshot | implemented; native visual validation pending | off-render-path loading tests; localized state tests; representative UI verification | application service and all portable view states are verified; runtime visual matrix remains blocked by the Metal Toolchain |
+| M3-04 Sources presentation | coordinator | M3-03 commit | source-health snapshots | queued | localized remediation-state tests; stale-result tests; representative UI verification | render first-class collection health and actionable remediation |
 
 ## Verification contract
 
@@ -199,6 +200,18 @@ Every commit must include the corresponding update to this file: task status, de
 - `cargo fmt --all --check`, `cargo check --workspace --all-targets`, and `cargo clippy --workspace --all-targets -- -D warnings`: passed.
 - `cargo test --workspace`: passed (79 tests: 70 unit tests and 9 storage/pipeline integration tests).
 - `git diff --check` passed; the privacy scan found only policy examples and intentional synthetic fixture paths.
+
+## M3-03 verification evidence
+
+- The new portable `agentmeter-app` crate owns local database directory creation, SQLite opening, migration, and immutable Overview queries. `apps/desktop` depends on this service but does not own filesystem or database work.
+- GPUI starts the synchronous SQLite service on its background executor, then applies the result on the entity context through the existing single-use request generation. No database or filesystem call runs during rendering.
+- Presentation state distinguishes loading, genuine empty, populated, partial-data, data-directory error, and database error. Setup, unsupported-schema, and collection failures take precedence over empty totals so collection failure never appears as a valid zero.
+- Overview renders a collection-health strip and token, session, active-day, model, provider-reported cost, and API-equivalent estimate cards. Missing cost kinds remain localized “not available” rather than `$0`; all new copy and errors have English and Simplified Chinese entries.
+- Count and USD formatting tests cover both locales; service tests use temporary synthetic databases and verify both successful initialization and privacy-safe directory-error classification.
+- On the Apple Silicon runner, a temporary `runtime_shaders` feature bypassed only the unavailable Metal CLI. The fixed GPUI revision exposed one Rust 2024 opaque-return lifetime overcapture; a precise capture fixed it, after which the final six-crate workspace candidate passed all-target type checking, all 84 tests, and Clippy with warnings denied.
+- The Linux orb also passed `cargo fmt --all --check`, `cargo check --workspace --all-targets`, all 84 tests, and `cargo clippy --workspace --all-targets -- -D warnings` with the production dependency features.
+- `git diff --check` passed; the privacy scan found only policy examples and intentional synthetic fixture paths.
+- The committed dependency remains the production `font-kit` configuration, not `runtime_shaders`. Native launch, interaction, and the light/dark English/Chinese visual matrix still require the runner's Metal Toolchain and remain pending.
 
 ## Budget ledger
 

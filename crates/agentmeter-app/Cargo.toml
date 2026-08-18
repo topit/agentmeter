@@ -1,0 +1,15 @@
+[package]
+name = "agentmeter-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+agentmeter-core = { path = "../agentmeter-core" }
+agentmeter-storage = { path = "../agentmeter-storage" }
+
+[dev-dependencies]
+tempfile = "3.27.0"
+
+[lints]
+workspace = true

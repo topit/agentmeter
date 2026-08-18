@@ -1,7 +1,12 @@
-use agentmeter_desktop::{Locale, MessageKey, Route, ShellState, ThemeMode, ThemePalette};
+use std::path::PathBuf;
+
+use agentmeter_desktop::{
+    Locale, MessageKey, OverviewLoadErrorKind, OverviewLoadState, OverviewService, OverviewState,
+    Route, ShellState, ThemeMode, ThemePalette,
+};
 use gpui::{
-    App, Bounds, Context, IntoElement, Render, TitlebarOptions, Window, WindowAppearance,
-    WindowBounds, WindowOptions, div, prelude::*, px, rgb, size,
+    AnyElement, App, Bounds, Context, IntoElement, Render, Task, TitlebarOptions, Window,
+    WindowAppearance, WindowBounds, WindowOptions, div, prelude::*, px, rgb, size,
 };
 
 pub fn run() {
@@ -25,6 +30,8 @@ pub fn run() {
 
 struct NavigationShell {
     state: ShellState,
+    overview: OverviewState,
+    _overview_task: Task<()>,
 }
 
 impl NavigationShell {
@@ -41,7 +48,36 @@ impl NavigationShell {
             cx.notify();
         })
         .detach();
-        Self { state }
+
+        let mut overview = OverviewState::default();
+        let request = overview.begin_request();
+        let load = cx.background_executor().spawn(async move {
+            let data_directory = macos_data_directory()?;
+            OverviewService::in_data_directory(data_directory)
+                .load()
+                .map_err(|error| error.kind())
+        });
+        let overview_task = cx.spawn(async move |this, cx| {
+            let result = load.await;
+            this.update(cx, |this, cx| {
+                match result {
+                    Ok(snapshot) => {
+                        this.overview.apply_snapshot(request, snapshot);
+                    }
+                    Err(error) => {
+                        this.overview.apply_error(request, error);
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        });
+
+        Self {
+            state,
+            overview,
+            _overview_task: overview_task,
+        }
     }
 
     fn nav_item(
@@ -49,7 +85,7 @@ impl NavigationShell {
         route: Route,
         palette: ThemePalette,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let selected = self.state.selected_route() == route;
         let label = self.state.label(route);
         let item = div()
@@ -82,6 +118,164 @@ impl NavigationShell {
             item.text_color(rgb(palette.text))
                 .hover(move |style| style.bg(rgb(palette.hover)))
         }
+    }
+
+    fn overview_content(&self, palette: ThemePalette) -> AnyElement {
+        let locale = self.state.locale();
+        match self.overview.load_state() {
+            OverviewLoadState::Loading => div()
+                .mt_3()
+                .text_color(rgb(palette.muted_text))
+                .child(locale.text(MessageKey::OverviewLoading))
+                .into_any_element(),
+            OverviewLoadState::Empty => div()
+                .mt_6()
+                .max_w(px(560.0))
+                .p_6()
+                .rounded_lg()
+                .border_1()
+                .border_color(rgb(palette.border))
+                .bg(rgb(palette.surface))
+                .child(
+                    div()
+                        .text_lg()
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .child(locale.text(MessageKey::OverviewEmptyTitle)),
+                )
+                .child(
+                    div()
+                        .mt_2()
+                        .text_color(rgb(palette.muted_text))
+                        .child(locale.text(MessageKey::OverviewEmptyBody)),
+                )
+                .into_any_element(),
+            OverviewLoadState::Error(error) => {
+                let message = match error {
+                    OverviewLoadErrorKind::DataDirectory => MessageKey::OverviewDataDirectoryError,
+                    OverviewLoadErrorKind::Database => MessageKey::OverviewDatabaseError,
+                };
+                div()
+                    .mt_6()
+                    .max_w(px(560.0))
+                    .p_6()
+                    .rounded_lg()
+                    .border_1()
+                    .border_color(rgb(palette.border))
+                    .bg(rgb(palette.surface))
+                    .child(
+                        div()
+                            .text_lg()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child(locale.text(MessageKey::OverviewErrorTitle)),
+                    )
+                    .child(
+                        div()
+                            .mt_2()
+                            .text_color(rgb(palette.muted_text))
+                            .child(locale.text(message)),
+                    )
+                    .into_any_element()
+            }
+            OverviewLoadState::Populated | OverviewLoadState::Partial => {
+                self.overview_metrics(palette).into_any_element()
+            }
+        }
+    }
+
+    fn overview_metrics(&self, palette: ThemePalette) -> impl IntoElement {
+        let locale = self.state.locale();
+        let snapshot = self
+            .overview
+            .snapshot()
+            .expect("loaded overview state must contain a snapshot");
+        let total_tokens = snapshot
+            .tokens
+            .checked_total()
+            .map(|value| locale.format_count(value))
+            .unwrap_or_else(|| locale.text(MessageKey::NotAvailable).to_owned());
+        let provider_cost = snapshot
+            .costs
+            .provider_reported_usd
+            .map(|value| locale.format_usd(value))
+            .unwrap_or_else(|| locale.text(MessageKey::NotAvailable).to_owned());
+        let estimated_cost = snapshot
+            .costs
+            .api_equivalent_estimate_usd
+            .map(|value| locale.format_usd(value))
+            .unwrap_or_else(|| locale.text(MessageKey::NotAvailable).to_owned());
+        let health_message = if self.overview.load_state() == OverviewLoadState::Partial {
+            MessageKey::OverviewPartial
+        } else {
+            MessageKey::HealthHealthy
+        };
+
+        div()
+            .mt_6()
+            .flex()
+            .flex_col()
+            .gap_4()
+            .child(
+                div()
+                    .p_4()
+                    .rounded_lg()
+                    .border_1()
+                    .border_color(rgb(palette.border))
+                    .bg(rgb(palette.surface))
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child(locale.text(MessageKey::CollectionHealth)),
+                    )
+                    .child(
+                        div()
+                            .mt_1()
+                            .text_color(rgb(palette.muted_text))
+                            .child(locale.text(health_message)),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap_4()
+                    .child(metric_card(
+                        locale.text(MessageKey::TotalTokens),
+                        total_tokens,
+                        palette,
+                    ))
+                    .child(metric_card(
+                        locale.text(MessageKey::Sessions),
+                        locale.format_count(snapshot.session_count),
+                        palette,
+                    ))
+                    .child(metric_card(
+                        locale.text(MessageKey::ActiveDays),
+                        locale.format_count(snapshot.active_days),
+                        palette,
+                    )),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap_4()
+                    .child(metric_card(
+                        locale.text(MessageKey::Models),
+                        locale.format_count(snapshot.model_count),
+                        palette,
+                    ))
+                    .child(metric_card(
+                        locale.text(MessageKey::ProviderReportedCost),
+                        provider_cost,
+                        palette,
+                    ))
+                    .child(metric_card(
+                        locale.text(MessageKey::ApiEquivalentCost),
+                        estimated_cost,
+                        palette,
+                    )),
+            )
     }
 }
 
@@ -130,7 +324,17 @@ impl Render for NavigationShell {
                             .map(|route| self.nav_item(route, palette, cx)),
                     ),
             )
-            .child(
+            .child({
+                let content = if selected == Route::Overview {
+                    self.overview_content(palette)
+                } else {
+                    div()
+                        .mt_3()
+                        .max_w(px(560.0))
+                        .text_color(rgb(palette.muted_text))
+                        .child(locale.text(MessageKey::ShellPlaceholder))
+                        .into_any_element()
+                };
                 div()
                     .flex_1()
                     .h_full()
@@ -141,15 +345,40 @@ impl Render for NavigationShell {
                             .font_weight(gpui::FontWeight::SEMIBOLD)
                             .child(self.state.label(selected)),
                     )
-                    .child(
-                        div()
-                            .mt_3()
-                            .max_w(px(560.0))
-                            .text_color(rgb(palette.muted_text))
-                            .child(locale.text(MessageKey::ShellPlaceholder)),
-                    ),
-            )
+                    .child(content)
+            })
     }
+}
+
+fn metric_card(label: &'static str, value: String, palette: ThemePalette) -> impl IntoElement {
+    div()
+        .flex_1()
+        .min_w(px(160.0))
+        .p_4()
+        .rounded_lg()
+        .border_1()
+        .border_color(rgb(palette.border))
+        .bg(rgb(palette.surface))
+        .child(
+            div()
+                .text_sm()
+                .text_color(rgb(palette.muted_text))
+                .child(label),
+        )
+        .child(
+            div()
+                .mt_2()
+                .text_xl()
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .child(value),
+        )
+}
+
+fn macos_data_directory() -> Result<PathBuf, OverviewLoadErrorKind> {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .map(|home| home.join("Library").join("Application Support"))
+        .ok_or(OverviewLoadErrorKind::DataDirectory)
 }
 
 fn appearance_is_dark(appearance: WindowAppearance) -> bool {
