@@ -490,4 +490,4 @@ These decisions do not block M1 but should be settled before macOS beta:
 
 ## 19. Immediate next implementation step
 
-Implement Codex CLI as the next M2 adapter, beginning with upstream format research and synthetic fork/replay/cumulative fixtures. Keep Amp local history experimental until source-health/i18n/UI criteria and representative source-total cross-checks are complete.
+Complete Codex CLI cross-file lineage: resolve official `history_base`, exclude copied legacy fork history, preserve post-fork usage, and test archive/revert identity. Then assess compressed rollout and headless variants before calling the adapter supported.

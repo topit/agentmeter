@@ -50,6 +50,7 @@ impl CollectorAdapter for ReferenceJsonlAdapter {
             .path
             .is_file()
             .then(|| SourceCandidate {
+                source_key: self.path.to_string_lossy().into_owned(),
                 path: self.path.clone(),
                 kind: SourceKind::AppendOnlyJsonl,
             })
@@ -155,6 +156,7 @@ impl CollectorAdapter for ReferenceSnapshotAdapter {
             .path
             .is_file()
             .then(|| SourceCandidate {
+                source_key: self.path.to_string_lossy().into_owned(),
                 path: self.path.clone(),
                 kind: SourceKind::MutableJson,
             })
@@ -365,6 +367,7 @@ mod tests {
         let file = NamedTempFile::new().unwrap();
         let adapter = ReferenceSnapshotAdapter::new(file.path());
         let source = crate::SourceCandidate {
+            source_key: file.path().to_string_lossy().into_owned(),
             path: file.path().to_owned(),
             kind: crate::SourceKind::MutableJson,
         };

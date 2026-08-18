@@ -1,6 +1,7 @@
 //! AgentMeter source discovery and ingestion contracts.
 
 pub mod amp;
+pub mod codex;
 mod file_support;
 pub mod reference;
 
@@ -20,6 +21,8 @@ pub enum SourceKind {
 pub struct SourceCandidate {
     pub path: PathBuf,
     pub kind: SourceKind,
+    /// Adapter-scoped identity that remains stable when a source moves.
+    pub source_key: String,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]

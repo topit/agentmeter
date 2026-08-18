@@ -83,6 +83,7 @@ impl CollectorAdapter for AmpLocalHistoryAdapter {
                 continue;
             }
             sources.push(SourceCandidate {
+                source_key: entry.file_name().to_string_lossy().into_owned(),
                 path: entry.path(),
                 kind: SourceKind::MutableJson,
             });

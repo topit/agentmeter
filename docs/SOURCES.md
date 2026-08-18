@@ -6,7 +6,7 @@ AgentMeter distinguishes implemented parsers from product-level support. A sourc
 |---|---|---|---|
 | Amp `--stream-json` capture | [Official Amp Streaming JSON documentation](https://ampcode.com/news/streaming-json) | parser implemented; not yet product-supported | opt-in capture only; the documented stream omits event timestamps, model IDs, and stable per-event IDs |
 | Amp local `threads/T-*.json` | undocumented local implementation, cross-checked against [Tokens](https://github.com/missuo/tokens) and [Tokscale](https://github.com/junhoyeo/tokscale) | experimental parser implemented; not product-supported | whole-file replacement; schema is not an Amp compatibility contract; credit values are diagnosed but not yet treated as USD cost |
-| Codex CLI | upstream source and local JSONL fixtures pending | planned for M2 | not implemented |
+| Codex CLI rollout JSONL | [official OpenAI Codex rollout/protocol source](https://github.com/openai/codex) | incremental parser phase 1 implemented; not product-supported | cross-file fork lineage/replay, compressed rollouts, and headless variants remain pending |
 | Pi | upstream source and local JSONL fixtures pending | planned for M2 | not implemented |
 
 ## Amp Stream JSON normalization
@@ -31,3 +31,16 @@ The collector deserializes only routing and usage fields. Prompt, response, thin
 - Amp `credits` are not assumed to be dollars. Their presence is diagnosed until pricing storage can preserve the source value and semantics separately.
 
 All fixtures are inline, deterministic, and synthetic. They were manually constructed on 2026-08-18 from the observed dual ledger/message shape, contain no prompt/response/tool content, and cross-check the same reconciliation outcomes covered by Tokens and Tokscale: full-ledger deduplication, partial-ledger completion, message-ID precedence, and timestamp fallback.
+
+## Codex CLI rollout JSONL
+
+- Discovery honors a supplied Codex home and recursively scans both `sessions` and `archived_sessions`. The filename is the stable adapter source key across archive movement; if both copies temporarily exist, the active copy wins.
+- The parser follows OpenAI Codex's `session_meta`, `turn_context`, and `event_msg/token_count` contracts. It preserves thread, model, provider, ordinal, byte offset, timestamp source, and raw usage statistics without deserializing transcript content.
+- `last_token_usage` is the preferred per-request increment. `total_token_usage` is persisted in parser state as a cumulative watermark; equal snapshots are skipped, total-only snapshots become component-wise deltas, and regressions are diagnosed as reset boundaries.
+- Codex input includes cached input, and reasoning output is included in output. Canonical mutually exclusive buckets are therefore: uncached input = input − cache read − cache write, and non-reasoning output = output − reasoning. Underflow or a source-total mismatch lowers confidence to `Derived` and produces a warning.
+- Ordinals provide native event identity. Legacy records fall back to a versioned fingerprint over thread identity, byte offset, and complete line bytes.
+- Byte checkpoints include parser state and verified prefix continuity. A partial trailing record is retried without advancing the checkpoint; complete malformed records are diagnosed while later records remain collectible; truncation or rewrite triggers source-owned replacement.
+
+Phase 1 synthetic fixtures cover active/archive precedence, official token normalization, cumulative-only deltas, equal-snapshot deduplication, resumed parser state, rewrite recovery, null usage info, malformed middle records, and incomplete tails. The expected normalization and cumulative behavior were cross-checked against Waku, Tokens/Tokscale, and ccusage; official Codex source remains authoritative.
+
+Codex remains **not supported** at product level. The next phase must resolve official `history_base` lineage and legacy fork replay across files, then add compressed/headless variants and source-health/i18n/UI acceptance coverage.

@@ -12,8 +12,8 @@ This file is the durable execution ledger for the current milestone. Product and
 
 ## Operational reality
 
-- Base revision: `5ac3e1e089a7fae3f67fe181382de80d4d183175`
-- Branch: `main`, tracking GitHub `github/main`; M1 and M2-01 have been pushed
+- Base revision: `fcc9481d353e9c58f7db94d48180e8a66c943f97`
+- Branch: `main`, tracking GitHub `github/main`; M1 through M2-02 have been pushed
 - Additional remote: Amp-hosted `origin` remains read-only for this work
 - Amp project and `origin` still use `moeit/token-usage` pending a Puck-managed rename
 - Toolchain: Rust 1.96.0; repository checks are defined in `AGENTS.md`
@@ -33,9 +33,10 @@ This file is the durable execution ledger for the current milestone. Product and
 | Task | Owner | Base | Depends on | Status | Required verification | Result / next action |
 |---|---|---|---|---|---|---|
 | M2-01 Amp Stream JSON | coordinator | `dbbd1af` | M1 ledger | pushed | fixture tests; collector-to-storage pipeline; workspace checks | committed and pushed as `5ac3e1e` |
-| M2-02 Amp local history | coordinator | `5ac3e1e` | undocumented schema research | integrated | reconciliation fixtures; independent parser cross-check; workspace checks | all checks passed; ready to commit and push |
-| M2-03 Codex CLI | coordinator | M2-02 | upstream format research | queued | fork/replay/cumulative fixtures and cross-check | not started |
-| M2-04 Pi | coordinator | M2-03 | upstream format research | queued | fixture and cross-check suite | not started |
+| M2-02 Amp local history | coordinator | `5ac3e1e` | undocumented schema research | pushed | reconciliation fixtures; independent parser cross-check; workspace checks | committed and pushed as `fcc9481` |
+| M2-03a Codex JSONL core | coordinator | `fcc9481` | official protocol research | integrated | cumulative/incremental/archive fixtures; storage pipeline; workspace checks | all checks passed; ready to commit and push |
+| M2-03b Codex lineage | coordinator | M2-03a | official history lineage | queued | paginated/legacy fork, replay, revert and archive fixtures | not started |
+| M2-04 Pi | coordinator | M2-03b | upstream format research | queued | fixture and cross-check suite | not started |
 
 ## Verification contract
 
@@ -89,6 +90,18 @@ This file is the durable execution ledger for the current milestone. Product and
 - Collector-to-storage integration verifies source-owned replacement removes stale events and rebuilds canonical daily usage.
 - Reconciliation outcomes were compared with the current Tokens and Tokscale Amp parsers; AgentMeter deliberately avoids their inferred Anthropic provider and synthetic per-message timestamp.
 - `git diff --check` and privacy-pattern scan passed; both path matches are intentional `/fixture/home/...` synthetic paths and fixtures contain no content-bearing message/tool fields.
+
+## M2-03a verification evidence
+
+- `cargo fmt --all --check`: passed.
+- `cargo check --workspace --all-targets`: passed.
+- `cargo test --workspace`: passed (47 tests: 41 unit tests and 6 integration tests).
+- `cargo clippy --workspace --all-targets -- -D warnings`: passed.
+- Codex tests cover active/archive precedence, exclusive cache/reasoning normalization, `last_token_usage`, cumulative-only delta, equal snapshot suppression, last-only baseline synthesis, resumed parser state, rewrite recovery, malformed complete lines, null info, and incomplete tails.
+- Collector-to-storage integration verifies a cumulative checkpoint resumes into exact canonical daily totals.
+- A final state-machine review found and fixed last-only baseline loss before submission; its regression test proves the following cumulative snapshot does not count that usage twice.
+- Official OpenAI Codex source defines the contract; Waku, Tokens/Tokscale, and ccusage were used only to cross-check normalization and cumulative behavior.
+- `git diff --check` and privacy scanning passed; the sole path match is an intentional `/fixture/home/...` synthetic path and fixtures contain no transcript-bearing fields.
 
 ## Budget ledger
 

@@ -54,6 +54,7 @@ impl CollectorAdapter for AmpStreamJsonAdapter {
             .path
             .is_file()
             .then(|| SourceCandidate {
+                source_key: self.path.to_string_lossy().into_owned(),
                 path: self.path.clone(),
                 kind: SourceKind::AppendOnlyJsonl,
             })
