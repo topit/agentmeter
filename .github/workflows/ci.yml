@@ -49,9 +49,32 @@ jobs:
           set -euo pipefail
           mkdir -p screenshots
           BIN="target/debug/agentmeter-desktop"
+          PREFS_DB="$HOME/Library/Application Support/AgentMeter/agentmeter.db"
 
+          # Pre-grant screen capture so a TCC prompt cannot cover the windows.
+          sudo sqlite3 "/Library/Application Support/com.apple.TCC/TCC.db" \
+            "INSERT OR REPLACE INTO access
+             (service, client, client_type, auth_value, auth_reason, auth_version,
+              indirect_object_identifier_type, indirect_object_identifier, flags, last_modified)
+             VALUES
+             ('kTCCServiceScreenCapture','/bin/bash',1,2,0,1,0,'UNUSED',0,datetime('now')),
+             ('kTCCServiceScreenCapture','/usr/local/bin/bash',1,2,0,1,0,'UNUSED',0,datetime('now')),
+             ('kTCCServiceScreenCapture','com.apple.screencapture',0,2,0,1,0,'UNUSED',0,datetime('now'))" || true
+
+          # One launch creates the full schema so preferences can be seeded
+          # through the app's own table.
+          "$BIN" & FIRST_PID=$!
+          sleep 8
+          kill "$FIRST_PID" 2>/dev/null || true
+          wait "$FIRST_PID" 2>/dev/null || true
+          sleep 1
+
+          # The locale and theme matrix drives the app's own persisted
+          # preferences, which also exercises startup preference loading.
           capture() {
-            local name="$1" lang="$2" route="$3"
+            local name="$1" pref_lang="$2" lang="$3" appearance="$4" route="$5"
+            sqlite3 "$PREFS_DB" "INSERT OR REPLACE INTO preferences (key, value_json)
+             VALUES ('app_preferences', '{\"language\":\"$pref_lang\",\"appearance\":\"$appearance\"}')"
             LANG="$lang" AGENTMETER_INITIAL_ROUTE="$route" "$BIN" &
             local pid=$!
             sleep 8
@@ -62,20 +85,18 @@ jobs:
           }
 
           for route in overview sources settings; do
-            capture "${route}-en-light" "en_US.UTF-8" "$route"
+            capture "${route}-en-light" en "en_US.UTF-8" light "$route"
           done
-          capture "overview-zh-light" "zh_CN.UTF-8" overview
-          capture "sources-zh-light" "zh_CN.UTF-8" sources
-          capture "settings-zh-light" "zh_CN.UTF-8" settings
+          capture "overview-zh-light" zh-cn "zh_CN.UTF-8" light overview
+          capture "sources-zh-light" zh-cn "zh_CN.UTF-8" light sources
+          capture "settings-zh-light" zh-cn "zh_CN.UTF-8" light settings
 
-          defaults write -g AppleInterfaceStyle -string Dark
           for route in overview sources settings; do
-            capture "${route}-en-dark" "en_US.UTF-8" "$route"
+            capture "${route}-en-dark" en "en_US.UTF-8" dark "$route"
           done
-          capture "overview-zh-dark" "zh_CN.UTF-8" overview
-          capture "sources-zh-dark" "zh_CN.UTF-8" sources
-          capture "settings-zh-dark" "zh_CN.UTF-8" settings
-          defaults delete -g AppleInterfaceStyle 2>/dev/null || true
+          capture "overview-zh-dark" zh-cn "zh_CN.UTF-8" dark overview
+          capture "sources-zh-dark" zh-cn "zh_CN.UTF-8" dark sources
+          capture "settings-zh-dark" zh-cn "zh_CN.UTF-8" dark settings
       - name: Upload the visual matrix
         uses: actions/upload-artifact@v4
         with:
