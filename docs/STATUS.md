@@ -2,6 +2,10 @@
 
 This file is the durable execution ledger for the current milestone. Product and architecture authority remains in `docs/PLAN.md`.
 
+## Ledger update rule
+
+Every commit must include the corresponding update to this file: task status, decisive verification evidence, and next action. Roadmap or acceptance-criteria changes must also update `docs/PLAN.md`. Because a commit cannot record its own hash before it exists, the next task begins by reconciling the preceding row with the actual commit and push result.
+
 ## Authority envelope
 
 - Mode: implementation
@@ -12,8 +16,8 @@ This file is the durable execution ledger for the current milestone. Product and
 
 ## Operational reality
 
-- Base revision: `fcc9481d353e9c58f7db94d48180e8a66c943f97`
-- Branch: `main`, tracking GitHub `github/main`; M1 through M2-02 have been pushed
+- Base revision: `75ec3c7` (`Add incremental Pi session collector`)
+- Branch: `main`, tracking GitHub `github/main`; M1 through M2-04 have been pushed
 - Additional remote: Amp-hosted `origin` remains read-only for this work
 - Amp project and `origin` still use `moeit/token-usage` pending a Puck-managed rename
 - Toolchain: Rust 1.96.0; repository checks are defined in `AGENTS.md`
@@ -36,7 +40,8 @@ This file is the durable execution ledger for the current milestone. Product and
 | M2-02 Amp local history | coordinator | `5ac3e1e` | undocumented schema research | pushed | reconciliation fixtures; independent parser cross-check; workspace checks | committed and pushed as `fcc9481` |
 | M2-03a Codex JSONL core | coordinator | `fcc9481` | official protocol research | pushed | cumulative/incremental/archive fixtures; storage pipeline; workspace checks | committed and pushed as `cabf805` |
 | M2-03b Codex lineage | coordinator | `cabf805` | official history lineage | pushed | paginated/legacy fork, replay, revert and archive fixtures | committed and pushed as `5b54c3e` |
-| M2-04 Pi | coordinator | `5b54c3e` | upstream format research | integrated | fixture and cross-check suite | official v1-v3 token/fork/summary semantics implemented; all checks passed, ready to commit and push |
+| M2-04 Pi | coordinator | `5b54c3e` | upstream format research | pushed | fixture and cross-check suite | committed and pushed as `75ec3c7` |
+| M2-05 Source health | coordinator | `75ec3c7` | collector diagnostics and checkpoints | queued | portable health-state tests; storage integration; workspace checks | implement the source-health model and immutable snapshots |
 
 ## Verification contract
 

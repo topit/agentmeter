@@ -9,9 +9,17 @@ The product is macOS-first and GPUI-based. Keep collection, domain, storage, and
 ## Source of truth
 
 - `docs/PLAN.md` owns product scope, architecture, milestones, and acceptance criteria.
+- `docs/STATUS.md` is the durable task ledger for current execution status, verification evidence, and the next queued work.
 - `README.md` is the concise public overview and onboarding document.
 - Source format claims must be backed by fixtures, upstream source code, or official documentation.
 - Do not call a client supported until its plan acceptance criteria are met.
+
+## Task tracking and commits
+
+- Before every commit, update `docs/STATUS.md` with the affected task status, verification result, and next action; stage that update in the same commit.
+- Update `docs/PLAN.md` in the same commit whenever roadmap order, milestone scope, acceptance criteria, or the immediate next step changes.
+- At the start of the next task, reconcile the prior task's ledger row with its actual commit and push result before making further implementation changes.
+- Do not create a second task-list file. `docs/PLAN.md` and `docs/STATUS.md` are the roadmap and execution ledger respectively.
 
 ## Workspace boundaries
 
