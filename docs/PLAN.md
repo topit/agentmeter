@@ -382,7 +382,7 @@ Representative adapter totals should be compared with upstream agent output and 
 
 ## 15. Milestones
 
-### M0 — Repository foundation (current)
+### M0 — Repository foundation (complete)
 
 - Rust workspace and pinned toolchain;
 - crate boundaries;
@@ -392,7 +392,7 @@ Representative adapter totals should be compared with upstream agent output and 
 
 Exit: clean setup from a fresh orb and all workspace checks pass.
 
-### M1 — Fixture lab and SQLite ledger
+### M1 — Fixture lab and SQLite ledger (complete)
 
 - sanitized fixture policy/tooling;
 - schema v1 and migrations;

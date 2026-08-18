@@ -4,7 +4,7 @@
 
 AgentMeter reads usage records that agent tools already keep on the local machine, normalizes them into an auditable event ledger, and presents token, cost, session, model, and collection-health views. The first supported desktop platform is macOS; the portable Rust core is designed to support Windows later.
 
-AgentMeter is at the repository-foundation stage. It does not collect real usage yet.
+AgentMeter has a tested SQLite event ledger and synthetic reference collectors. It does not collect real agent usage yet.
 
 ## Product principles
 
@@ -33,7 +33,7 @@ crates/agentmeter-pricing      reported and estimated cost provenance
 
 The GPUI dependency will be pinned when the first real window is implemented. Keeping it out of this foundation commit avoids selecting an unverified moving revision before there is UI code that can test it.
 
-See [the complete product and engineering plan](docs/PLAN.md).
+See the [complete product and engineering plan](docs/PLAN.md), [current implementation status](docs/STATUS.md), and [fixture privacy policy](docs/FIXTURES.md).
 
 ## Development
 
@@ -59,4 +59,4 @@ AgentMeter 是一个本地优先的桌面应用，用来统一统计 Amp、Codex
 
 首个正式版本以 macOS 为目标，界面使用 GPUI。核心采集、存储和计价逻辑保持纯 Rust、跨平台，为后续 Windows 版本做准备。应用从第一天支持英文、简体中文、亮色、暗色和跟随系统主题。
 
-目前仓库只完成了工程基础和关键契约，还没有开始读取真实 agent 数据。详细范围、里程碑、验收标准和风险见 [`docs/PLAN.md`](docs/PLAN.md)。
+目前仓库已完成 SQLite 事件账本和合成参考采集器，还没有开始读取真实 agent 数据。详细范围、里程碑、验收标准和风险见 [`docs/PLAN.md`](docs/PLAN.md)。

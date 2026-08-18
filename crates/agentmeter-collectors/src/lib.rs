@@ -1,8 +1,10 @@
 //! AgentMeter source discovery and ingestion contracts.
 
+pub mod reference;
+
 use std::path::PathBuf;
 
-use agentmeter_core::UsageEvent;
+use agentmeter_core::UsageRecord;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SourceKind {
@@ -21,13 +23,31 @@ pub struct SourceCandidate {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SourceCheckpoint {
     pub byte_offset: Option<u64>,
+    pub source_len: u64,
+    pub prefix_fingerprint: Option<String>,
     pub parser_state: Vec<u8>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum IngestMode {
+    #[default]
+    Append,
+    Replace,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum IngestStart<'a> {
+    Fresh,
+    Resume(&'a SourceCheckpoint),
+    Rebuild,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct IngestBatch {
-    pub events: Vec<UsageEvent>,
+    pub mode: IngestMode,
+    pub records: Vec<UsageRecord>,
     pub checkpoint: SourceCheckpoint,
+    pub source_fingerprint: String,
     pub warnings: Vec<String>,
 }
 
@@ -44,6 +64,14 @@ impl std::fmt::Display for CollectorError {
 
 impl std::error::Error for CollectorError {}
 
+impl CollectorError {
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+}
+
 /// Each adapter owns discovery and source-specific reconciliation. Database
 /// transactions, pricing, and presentation remain outside the adapter.
 pub trait CollectorAdapter {
@@ -53,6 +81,6 @@ pub trait CollectorAdapter {
     fn ingest(
         &self,
         source: &SourceCandidate,
-        checkpoint: Option<&SourceCheckpoint>,
+        start: IngestStart<'_>,
     ) -> Result<IngestBatch, CollectorError>;
 }

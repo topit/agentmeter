@@ -35,6 +35,14 @@ pub enum DataConfidence {
     Estimated,
 }
 
+/// Where the event timestamp came from.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TimestampOrigin {
+    Source,
+    Derived,
+    FileModified,
+}
+
 /// One normalized usage event. Client, provider, and model are intentionally
 /// separate dimensions: for example, Pi can call a DeepSeek model through
 /// OpenRouter.
@@ -50,6 +58,23 @@ pub struct UsageEvent {
     pub tokens: TokenBreakdown,
     pub source_reported_total: Option<u64>,
     pub confidence: DataConfidence,
+}
+
+/// Source details needed to audit a parser decision without storing message
+/// content.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EventProvenance {
+    pub native_id: Option<String>,
+    pub record_offset: Option<u64>,
+    pub schema_variant: String,
+    pub timestamp_origin: TimestampOrigin,
+    pub normalization_notes: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UsageRecord {
+    pub event: UsageEvent,
+    pub provenance: EventProvenance,
 }
 
 #[cfg(test)]
