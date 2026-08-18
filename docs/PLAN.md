@@ -190,6 +190,8 @@ Recommended SQLite defaults: WAL, foreign keys on, busy timeout, and `synchronou
 | Cursor | private DB or explicit export/API cache | research after stable MVP | schema and authentication churn |
 | Grok bot/remote agents | export/API/OTel | opt-in import | no local source on the desktop |
 
+Amp's documented `--stream-json` output is implemented as a separate opt-in, append-only source. It is authoritative for token field names but does not expose event timestamps, model/provider identity, or a native per-event ID. Local `threads/*.json` parsing remains an explicitly experimental path because Amp does not publish that persistence schema; third-party parsers are cross-check evidence, not a compatibility guarantee.
+
 ### Definition of supported
 
 A source is marked supported only when:
@@ -488,4 +490,4 @@ These decisions do not block M1 but should be settled before macOS beta:
 
 ## 19. Immediate next implementation step
 
-Design SQLite schema v1 and fixture sanitization rules together, then implement one synthetic append-only adapter and one mutable-snapshot adapter. This validates the ingestion/storage contract before committing to private vendor formats. After that, implement Amp as the first real adapter because its ledger/message reconciliation exercises source ownership, confidence, and diagnostics without Codex's more complex fork state machine.
+Complete the experimental Amp local-history adapter and cross-check its `usageLedger`/assistant-message reconciliation against independent parsers. Keep the official Stream JSON collector separate so an undocumented local schema change cannot corrupt authoritative captured usage.

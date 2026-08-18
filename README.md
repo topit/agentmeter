@@ -33,7 +33,7 @@ crates/agentmeter-pricing      reported and estimated cost provenance
 
 The GPUI dependency will be pinned when the first real window is implemented. Keeping it out of this foundation commit avoids selecting an unverified moving revision before there is UI code that can test it.
 
-See the [complete product and engineering plan](docs/PLAN.md), [current implementation status](docs/STATUS.md), and [fixture privacy policy](docs/FIXTURES.md).
+See the [complete product and engineering plan](docs/PLAN.md), [source support status](docs/SOURCES.md), [current implementation status](docs/STATUS.md), and [fixture privacy policy](docs/FIXTURES.md).
 
 ## Development
 

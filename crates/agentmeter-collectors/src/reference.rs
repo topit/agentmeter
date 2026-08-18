@@ -5,21 +5,22 @@
 //! agent formats are added.
 
 use std::{
-    fmt::Write as _,
     fs::File,
-    io::{BufRead, BufReader, Read, Seek, SeekFrom},
-    path::{Path, PathBuf},
+    io::{BufRead, BufReader, Seek, SeekFrom},
+    path::PathBuf,
 };
 
 use agentmeter_core::{
     DataConfidence, EventProvenance, TimestampOrigin, TokenBreakdown, UsageEvent, UsageRecord,
 };
 use serde::Deserialize;
-use sha2::{Digest, Sha256};
 
 use crate::{
     CollectorAdapter, CollectorError, IngestBatch, IngestMode, IngestStart, SourceCandidate,
     SourceCheckpoint, SourceKind,
+    file_support::{
+        checkpoint_continues, ensure_kind, hash_bytes, hash_file, hash_prefix, io_error,
+    },
 };
 
 const SCHEMA_VARIANT: &str = "reference-v1";
@@ -62,11 +63,11 @@ impl CollectorAdapter for ReferenceJsonlAdapter {
         start: IngestStart<'_>,
     ) -> Result<IngestBatch, CollectorError> {
         ensure_kind(source, SourceKind::AppendOnlyJsonl)?;
-        let source_len = source.path.metadata().map_err(io_error)?.len();
+        let observed_source_len = source.path.metadata().map_err(io_error)?.len();
 
         let (mode, start_offset) = match start {
             IngestStart::Resume(checkpoint)
-                if checkpoint_continues(&source.path, checkpoint, source_len)? =>
+                if checkpoint_continues(&source.path, checkpoint, observed_source_len)? =>
             {
                 (
                     IngestMode::Append,
@@ -113,6 +114,7 @@ impl CollectorAdapter for ReferenceJsonlAdapter {
             }
         }
 
+        let source_len = source.path.metadata().map_err(io_error)?.len();
         Ok(IngestBatch {
             mode,
             records,
@@ -183,7 +185,7 @@ impl CollectorAdapter for ReferenceSnapshotAdapter {
                 prefix_fingerprint: None,
                 parser_state: Vec::new(),
             },
-            source_fingerprint: hex_digest(&bytes),
+            source_fingerprint: hash_bytes(&bytes),
             warnings: Vec::new(),
         })
     }
@@ -250,75 +252,6 @@ impl ReferenceEvent {
             },
         }
     }
-}
-
-fn checkpoint_continues(
-    path: &Path,
-    checkpoint: &SourceCheckpoint,
-    source_len: u64,
-) -> Result<bool, CollectorError> {
-    let Some(offset) = checkpoint.byte_offset else {
-        return Ok(false);
-    };
-    if source_len < offset || checkpoint.source_len < offset {
-        return Ok(false);
-    }
-    let Some(expected) = checkpoint.prefix_fingerprint.as_deref() else {
-        return Ok(false);
-    };
-    Ok(hash_prefix(path, offset)? == expected)
-}
-
-fn hash_prefix(path: &Path, len: u64) -> Result<String, CollectorError> {
-    let mut limited = File::open(path).map_err(io_error)?.take(len);
-    let mut hasher = Sha256::new();
-    let mut buffer = [0_u8; 8192];
-    loop {
-        let bytes_read = limited.read(&mut buffer).map_err(io_error)?;
-        if bytes_read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..bytes_read]);
-    }
-    Ok(digest_hex(hasher.finalize()))
-}
-
-fn hash_file(path: &Path) -> Result<String, CollectorError> {
-    let mut bytes = Vec::new();
-    File::open(path)
-        .map_err(io_error)?
-        .read_to_end(&mut bytes)
-        .map_err(io_error)?;
-    Ok(hex_digest(&bytes))
-}
-
-fn hex_digest(bytes: &[u8]) -> String {
-    digest_hex(Sha256::digest(bytes))
-}
-
-fn digest_hex(digest: impl AsRef<[u8]>) -> String {
-    digest
-        .as_ref()
-        .iter()
-        .fold(String::with_capacity(64), |mut encoded, byte| {
-            write!(encoded, "{byte:02x}").expect("writing to a String cannot fail");
-            encoded
-        })
-}
-
-fn ensure_kind(source: &SourceCandidate, expected: SourceKind) -> Result<(), CollectorError> {
-    if source.kind == expected {
-        Ok(())
-    } else {
-        Err(CollectorError::new(format!(
-            "source kind {:?} is not {:?}",
-            source.kind, expected
-        )))
-    }
-}
-
-fn io_error(error: std::io::Error) -> CollectorError {
-    CollectorError::new(error.to_string())
 }
 
 #[cfg(test)]

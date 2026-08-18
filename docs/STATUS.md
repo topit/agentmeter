@@ -6,15 +6,15 @@ This file is the durable execution ledger for the current milestone. Product and
 
 - Mode: implementation
 - Authorized repository: this AgentMeter checkout
-- Allowed mutations: edit and verify repository files; local commits only when requested or needed for an explicit handoff
-- External mutations: no push, deploy, release, repository rename, or production data operation
+- Allowed mutations: edit and verify repository files; commit each completed step and push it to GitHub `github/main`
+- External mutations: GitHub pushes are authorized; no deploy, release, repository rename, Amp-origin push, or production data operation
 - Data boundary: synthetic fixtures only; do not copy real prompts, responses, code, account identifiers, secrets, or home paths into the repository
 
 ## Operational reality
 
-- Base revision: `01c9532d0e1b358b7c2a79aa1b59dd9a8faae499`
-- Branch: `main`, two local commits ahead of the Amp-hosted `origin/main`
-- Additional remote: `github` points to `git@github.com:topit/agentmeter.git`; nothing has been pushed by this milestone
+- Base revision: `dbbd1af7ce63ea9a6effba8d044241110332dca1`
+- Branch: `main`, tracking GitHub `github/main`; the M1 history has been pushed
+- Additional remote: Amp-hosted `origin` remains read-only for this work
 - Amp project and `origin` still use `moeit/token-usage` pending a Puck-managed rename
 - Toolchain: Rust 1.96.0; repository checks are defined in `AGENTS.md`
 - Database runtime selected for M1: bundled SQLite through `rusqlite`; no external database service
@@ -27,6 +27,15 @@ This file is the durable execution ledger for the current milestone. Product and
 | M1-02 Reference collectors | coordinator | `01c9532` | core ingestion contract | completed | append/rewrite/truncation/parser-version tests | JSONL and mutable snapshot reference adapters implemented |
 | M1-03 Fixture policy | documentation worker | `01c9532` | accepted privacy rules | integrated | coordinator review; `git diff --check` | `docs/FIXTURES.md` accepted |
 | M1-04 Integration | coordinator | `01c9532` | M1-01, M1-02, M1-03 | integrated | full repository checks and reference pipeline test | all Tier 1 checks passed; ready for local milestone commit |
+
+## M2 task ledger
+
+| Task | Owner | Base | Depends on | Status | Required verification | Result / next action |
+|---|---|---|---|---|---|---|
+| M2-01 Amp Stream JSON | coordinator | `dbbd1af` | M1 ledger | integrated | fixture tests; collector-to-storage pipeline; workspace checks | all checks passed; ready to commit and push |
+| M2-02 Amp local history | coordinator | M2-01 | undocumented schema research | queued | reconciliation fixtures; independent parser cross-check | implement as experimental, bounded whole-file replacement |
+| M2-03 Codex CLI | coordinator | M2-02 | upstream format research | queued | fork/replay/cumulative fixtures and cross-check | not started |
+| M2-04 Pi | coordinator | M2-03 | upstream format research | queued | fixture and cross-check suite | not started |
 
 ## Verification contract
 
@@ -59,6 +68,16 @@ This file is the durable execution ledger for the current milestone. Product and
 - `cargo clippy --workspace --all-targets -- -D warnings`: passed.
 - `git diff --check`: passed.
 - Privacy-pattern scan found only the intentional synthetic `/fixture/home/...` paths permitted by `docs/FIXTURES.md`; no real home paths, credential signatures, or raw logs were found.
+
+## M2-01 verification evidence
+
+- `cargo fmt --all --check`: passed.
+- `cargo check --workspace --all-targets`: passed.
+- `cargo test --workspace`: passed (33 tests: 29 unit tests and 4 integration tests).
+- `cargo clippy --workspace --all-targets -- -D warnings`: passed.
+- Amp-specific collector tests cover documented flat usage, observed iteration usage, top-level filtering, append, rewrite, malformed, zero-token, and incomplete-tail behavior.
+- The Amp collector-to-storage integration test verifies resumed append and canonical daily aggregation.
+- `git diff --check` and privacy-pattern scan passed; the sole path match is an intentional `/fixture/home/...` synthetic path.
 
 ## Budget ledger
 

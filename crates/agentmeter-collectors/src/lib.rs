@@ -1,5 +1,7 @@
 //! AgentMeter source discovery and ingestion contracts.
 
+pub mod amp;
+mod file_support;
 pub mod reference;
 
 use std::path::PathBuf;
