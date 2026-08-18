@@ -3,6 +3,7 @@
 pub mod amp;
 pub mod codex;
 mod file_support;
+pub mod pi;
 pub mod reference;
 
 use std::path::PathBuf;

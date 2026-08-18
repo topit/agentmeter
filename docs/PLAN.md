@@ -1,6 +1,6 @@
 # AgentMeter product and engineering plan
 
-- Status: M2 collector implementation in progress; Amp and Codex parser milestones implemented
+- Status: M2 collector implementation in progress; Amp, Codex, and Pi parser milestones implemented
 - Product name: AgentMeter
 - Primary platform: macOS
 - Future platform: Windows
@@ -490,4 +490,4 @@ These decisions do not block M1 but should be settled before macOS beta:
 
 ## 19. Immediate next implementation step
 
-Implement the Pi adapter with the same fixture-first, incremental, provenance-preserving standard. In parallel milestone planning, assess Codex compressed rollout and headless variants before calling the Codex adapter supported; product-level source-health, i18n, and UI acceptance remain later gates.
+Implement the M2 source-health model and wire collector diagnostics/checkpoints into portable health snapshots. Cost-fact ingestion, periodic reconciliation, and cross-check reporting remain M2 gates; Codex compressed/headless variants and Pi's retained legacy location must be assessed before either adapter is called supported.

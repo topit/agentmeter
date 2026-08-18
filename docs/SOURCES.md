@@ -7,7 +7,7 @@ AgentMeter distinguishes implemented parsers from product-level support. A sourc
 | Amp `--stream-json` capture | [Official Amp Streaming JSON documentation](https://ampcode.com/news/streaming-json) | parser implemented; not yet product-supported | opt-in capture only; the documented stream omits event timestamps, model IDs, and stable per-event IDs |
 | Amp local `threads/T-*.json` | undocumented local implementation, cross-checked against [Tokens](https://github.com/missuo/tokens) and [Tokscale](https://github.com/junhoyeo/tokscale) | experimental parser implemented; not product-supported | whole-file replacement; schema is not an Amp compatibility contract; credit values are diagnosed but not yet treated as USD cost |
 | Codex CLI rollout JSONL | [official OpenAI Codex rollout/protocol source](https://github.com/openai/codex) | incremental parser and lineage reconciliation implemented; not product-supported | compressed rollouts, headless variants, and product-level health/UI acceptance remain pending |
-| Pi | upstream source and local JSONL fixtures pending | planned for M2 | not implemented |
+| Pi coding agent session JSONL | [official Pi session manager and AI types](https://github.com/badlogic/pi-mono) | incremental parser and fork reconciliation implemented; not product-supported | provider-reported cost facts, legacy one-directory discovery, and product-level health/UI acceptance remain pending |
 
 ## Amp Stream JSON normalization
 
@@ -47,3 +47,17 @@ All fixtures are inline, deterministic, and synthetic. They were manually constr
 Synthetic fixtures cover active/archive precedence, official token normalization, cumulative-only deltas, equal-snapshot deduplication, resumed parser state, rewrite recovery, null usage info, malformed middle records, incomplete tails, archived-parent paginated lineage, exact legacy replay, missing parents, cycles, and revert ordinal reuse. The storage pipeline proves parent plus child totals are counted once. Expected behavior was cross-checked against Waku, Tokens/Tokscale, and ccusage; official Codex source remains authoritative.
 
 Codex remains **not supported** at product level. Compressed rollout and headless variants still need a contract assessment and fixtures; source-health, i18n, and UI acceptance coverage also remain required.
+
+## Pi coding-agent session JSONL
+
+- The contract was verified against `badlogic/pi-mono` commit `2509b5c037d366979f2febfce4174b88aeaadc6a`. Discovery recursively scans a supplied sessions root. The default resolver honors `PI_CODING_AGENT_SESSION_DIR`, then `PI_CODING_AGENT_DIR/sessions`, then `<home>/.pi/agent/sessions`; custom settings and `--session-dir` are represented by supplying their resolved root.
+- The first `type: "session"` header owns the session ID, format version, and optional `parentSession`. Versions 1–3 are accepted; versions newer than 3 produce a visible unsupported-schema warning and no valid zero. Normal appends use byte checkpoints and prefix continuity; truncation or migration rewrite triggers source-owned replacement.
+- Assistant `message.usage` records preserve the native entry ID, message timestamp, provider, and `responseModel` when present (otherwise requested `model`). Every physical branch entry is counted because abandoned branches still represent API work; the `parentId` tree is a context projection, not a billing deletion.
+- Canonical input, cache-read, and cache-write map directly. Pi reasoning is a subset of output, so non-reasoning output is `output − reasoning`. `cacheWrite1h` is a subset of cache write and is not added again. Negative counters, subset underflow, total disagreement, invalid timestamps, and zero/overflow totals are diagnosed.
+- `compaction` and `branch_summary` usage are additional summarization calls and are counted with unknown provider/model rather than attributed by guesswork. Nested tool-result usage is excluded because Pi defines it as tool work outside main-context accounting.
+- Forks and clones copy native entries into a new file and set `parentSession`. AgentMeter locates the discovered parent by filename and suppresses only matching native entry IDs with identical usage facts. Missing parents or changed inherited facts remain visible and lower retained usage to `Derived`; entry IDs are never globally deduplicated across unrelated sessions.
+- Pi persists provider-reported cost alongside token usage. The current canonical collector request does not yet carry cost facts into `event_costs`; the adapter emits one source warning instead of silently treating those values as API estimates or dropping that limitation from health reporting.
+
+All Pi fixtures are deterministic and synthetic, omit message/tool/summary content, and model only schema fields needed for discovery, usage, lineage, malformed/truncated input, schema drift, and storage reconciliation. Waku was used only to contrast live context occupancy; Tokens, Tokscale, and ccusage were cross-checks. Official Pi source remains authoritative.
+
+Pi remains **not supported** at product level until provider-reported costs are ingested separately, the retained legacy location is assessed, and source-health/i18n/UI acceptance criteria pass.

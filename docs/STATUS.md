@@ -35,8 +35,8 @@ This file is the durable execution ledger for the current milestone. Product and
 | M2-01 Amp Stream JSON | coordinator | `dbbd1af` | M1 ledger | pushed | fixture tests; collector-to-storage pipeline; workspace checks | committed and pushed as `5ac3e1e` |
 | M2-02 Amp local history | coordinator | `5ac3e1e` | undocumented schema research | pushed | reconciliation fixtures; independent parser cross-check; workspace checks | committed and pushed as `fcc9481` |
 | M2-03a Codex JSONL core | coordinator | `fcc9481` | official protocol research | pushed | cumulative/incremental/archive fixtures; storage pipeline; workspace checks | committed and pushed as `cabf805` |
-| M2-03b Codex lineage | coordinator | `cabf805` | official history lineage | integrated | paginated/legacy fork, replay, revert and archive fixtures | official pointers and exact legacy prefixes reconciled; ready to commit and push |
-| M2-04 Pi | coordinator | M2-03b | upstream format research | queued | fixture and cross-check suite | not started |
+| M2-03b Codex lineage | coordinator | `cabf805` | official history lineage | pushed | paginated/legacy fork, replay, revert and archive fixtures | committed and pushed as `5b54c3e` |
+| M2-04 Pi | coordinator | `5b54c3e` | upstream format research | integrated | fixture and cross-check suite | official v1-v3 token/fork/summary semantics implemented; all checks passed, ready to commit and push |
 
 ## Verification contract
 
@@ -113,6 +113,16 @@ This file is the durable execution ledger for the current milestone. Product and
 - Collector-to-storage integration verifies that parent usage plus a paginated child's advancing cumulative total aggregates exactly once.
 - Parser version 2 invalidates only Codex source checkpoints so the corrected rollout-scoped identities and lineage baselines rebuild transactionally.
 - `git diff --check` passed. Privacy scanning found only policy examples and intentional `/fixture/home/...` synthetic paths; no secrets, real user home paths, or transcript-bearing fields were added.
+
+## M2-04 verification evidence
+
+- `cargo fmt --all --check`, `cargo check --workspace --all-targets`, and `cargo clippy --workspace --all-targets -- -D warnings`: passed.
+- `cargo test --workspace`: passed (61 tests: 53 unit tests and 8 collector-to-storage integration tests).
+- Official Pi source at commit `2509b5c037d366979f2febfce4174b88aeaadc6a` defines session roots, v1-v3 headers, append/rewrite behavior, assistant usage, native entry IDs, copied forks, compaction, branch summaries, and token subset semantics.
+- Pi tests cover recursive discovery, stable source identity, assistant and summary usage, response-model precedence, reasoning normalization, fork deduplication, v1 offset identity, missing parents, schema drift, malformed/incomplete records, append checkpoints, and rewrite replacement.
+- Collector-to-storage integration verifies copied fork usage is counted once while child and branch-summary work reaches canonical daily projections.
+- Waku, Tokens, Tokscale, and ccusage were cross-checks only. AgentMeter additionally counts official summary usage, uses native lineage IDs, and does not convert componentless totals into guessed output.
+- `git diff --check` passed. Privacy scanning found only policy examples and intentional `/fixture/home/...` synthetic paths; no source logs, content-bearing payloads, secrets, or real user paths were added.
 
 ## Budget ledger
 
