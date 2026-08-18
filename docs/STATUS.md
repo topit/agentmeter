@@ -46,7 +46,8 @@ Every commit must include the corresponding update to this file: task status, de
 | M2-07 Reconciliation report | coordinator | `8080c26` | complete collector facts | pushed | deterministic reconciliation/cross-check fixtures; workspace checks | committed and pushed as `e5d77ee` |
 | M2-08 Variant assessment | coordinator | `e5d77ee` | upstream Codex/Pi contracts | pushed | official-source evidence; variant fixtures where supported; workspace checks | committed and pushed as `eb161d5` |
 | M3-01 GPUI window shell | coordinator | `eb161d5` | tested GPUI revision | pushed; macOS validation blocked | macOS compile; locale/theme shell tests; representative UI verification | committed and pushed as `eddbcbf`; native build is blocked by the runner's missing Metal Toolchain |
-| M3-02 Overview snapshot | coordinator | `eddbcbf` | portable shell and aggregate queries | active | snapshot-generation tests; async stale-result tests; workspace checks | connect immutable overview data off the render path while native shell acceptance remains pending |
+| M3-02 Overview snapshot | coordinator | `eddbcbf` | portable shell and aggregate queries | completed | snapshot-generation tests; async stale-result tests; workspace checks | immutable headline query and stale-response gate implemented; ready to commit and push |
+| M3-03 Overview presentation | coordinator | M3-02 commit | immutable overview snapshot | queued | off-render-path loading tests; localized state tests; representative UI verification | load snapshots through an application service and render overview states |
 
 ## Verification contract
 
@@ -188,6 +189,16 @@ Every commit must include the corresponding update to this file: task status, de
 - Native validation used a clean detached checkout of `eddbcbf` on an Apple Silicon runner with macOS 26.5.2, Xcode/CLT 26.6, and repository-pinned Rust 1.96.0. Formatting passed and the 69 non-desktop tests passed in an isolated synthetic-data environment.
 - The macOS workspace check, tests, Clippy, desktop build, launch, and visual checks all stop before AgentMeter compilation because `gpui_macos` cannot invoke the missing Metal Toolchain. Xcode's component downloader also fails because its installed frameworks do not match the current macOS release; repairing that installation requires a system/toolchain update and was not authorized.
 - Native compilation, launch, interaction, accessibility inspection, and the required representative light/dark English/Chinese visual matrix remain pending and must not be inferred from source inspection or portable tests.
+
+## M3-02 verification evidence
+
+- `agentmeter-core` owns an immutable `OverviewSnapshot` containing mutually exclusive token buckets, event/session/active-day/model counts, separately labeled provider-reported and API-equivalent cost totals, data-quality counts, and the complete source-health snapshot.
+- Storage builds the snapshot directly from the canonical event ledger and cost facts. Missing cost kinds remain `None` rather than becoming a valid zero, UTC active days are explicit, provider/model identity remains separate, and unpriced events stay visible.
+- A deterministic content generation covers every exposed headline fact plus the nested source-health generation. Repeated unchanged queries return the same snapshot; changed canonical data changes the generation.
+- Portable desktop state issues single-use request generations and rejects out-of-order completions before they can replace the current immutable snapshot. GPUI and storage remain unaware of each other's lifecycle.
+- `cargo fmt --all --check`, `cargo check --workspace --all-targets`, and `cargo clippy --workspace --all-targets -- -D warnings`: passed.
+- `cargo test --workspace`: passed (79 tests: 70 unit tests and 9 storage/pipeline integration tests).
+- `git diff --check` passed; the privacy scan found only policy examples and intentional synthetic fixture paths.
 
 ## Budget ledger
 

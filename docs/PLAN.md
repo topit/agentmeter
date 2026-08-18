@@ -498,4 +498,4 @@ These decisions do not block M1 but should be settled before macOS beta:
 
 ## 19. Immediate next implementation step
 
-Connect the first immutable overview query snapshot with generation-based stale-result rejection, keeping SQLite work off the render path. Native shell acceptance remains required before M3 exits; rerun macOS launch, navigation, keyboard focus, English/Chinese, and system/light/dark verification after the runner has a working Metal Toolchain.
+Add the application-service boundary that loads Overview snapshots away from GPUI rendering, then render localized loading, empty, populated, partial-data, and error states from accepted immutable snapshots. Native shell acceptance remains required before M3 exits; rerun macOS verification after the runner has a working Metal Toolchain.

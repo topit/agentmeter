@@ -250,6 +250,36 @@ pub struct SourceHealthSnapshot {
     pub sources: Vec<SourceHealth>,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct OverviewCostSummary {
+    pub provider_reported_usd: Option<NanoUsd>,
+    pub api_equivalent_estimate_usd: Option<NanoUsd>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct OverviewDataQuality {
+    pub exact_events: u64,
+    pub derived_events: u64,
+    pub estimated_events: u64,
+    pub unpriced_events: u64,
+}
+
+/// Immutable headline facts for the Overview screen. Storage computes the
+/// stable content generation; presentation code uses a separate request token
+/// to reject out-of-order asynchronous loads.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OverviewSnapshot {
+    pub generation: u64,
+    pub tokens: TokenBreakdown,
+    pub event_count: u64,
+    pub session_count: u64,
+    pub active_days: u64,
+    pub model_count: u64,
+    pub costs: OverviewCostSummary,
+    pub data_quality: OverviewDataQuality,
+    pub source_health: SourceHealthSnapshot,
+}
+
 #[cfg(test)]
 mod tests {
     use super::{NanoUsd, NanoUsdParseError, TokenBreakdown};

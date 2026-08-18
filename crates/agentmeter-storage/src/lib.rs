@@ -3,9 +3,9 @@
 use std::{collections::BTreeMap, path::Path};
 
 use agentmeter_core::{
-    CostFact, CostKind, DataConfidence, NanoUsd, SourceHealth, SourceHealthSnapshot,
-    SourceHealthState, SourcePermissionState, SourceRemediation, TimestampOrigin, TokenBreakdown,
-    UsageEvent, UsageRecord,
+    CostFact, CostKind, DataConfidence, NanoUsd, OverviewCostSummary, OverviewDataQuality,
+    OverviewSnapshot, SourceHealth, SourceHealthSnapshot, SourceHealthState, SourcePermissionState,
+    SourceRemediation, TimestampOrigin, TokenBreakdown, UsageEvent, UsageRecord,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde::Serialize;
@@ -169,6 +169,8 @@ pub enum StorageError {
     IntegerOutOfRange { field: &'static str },
     #[error("token totals overflowed while building a reconciliation report")]
     ReconciliationOverflow,
+    #[error("usage or cost totals overflowed while building an overview snapshot")]
+    OverviewOverflow,
     #[error("failed to serialize diagnostics: {0}")]
     Diagnostics(#[from] serde_json::Error),
 }
@@ -549,7 +551,7 @@ impl Database {
             let (kind, usd, confidence) = row?;
             Ok(CostFact {
                 kind: parse_cost_kind(&kind),
-                usd: usd.map(|usd| NanoUsd::from_nanos((usd * 1_000_000_000.0).round() as u64)),
+                usd: usd.map(sql_usd_to_nano),
                 confidence: parse_confidence(&confidence),
             })
         })
@@ -789,6 +791,113 @@ impl Database {
         })?;
         rows.collect::<std::result::Result<Vec<_>, _>>()
             .map_err(Into::into)
+    }
+
+    pub fn overview_snapshot(&self) -> Result<OverviewSnapshot> {
+        let (
+            input,
+            output,
+            cache_read,
+            cache_write,
+            reasoning,
+            event_count,
+            session_count,
+            active_days,
+            model_count,
+            exact_events,
+            derived_events,
+            estimated_events,
+        ) = self.connection.query_row(
+            "SELECT
+                COALESCE(SUM(input_tokens), 0),
+                COALESCE(SUM(output_tokens), 0),
+                COALESCE(SUM(cache_read_tokens), 0),
+                COALESCE(SUM(cache_write_tokens), 0),
+                COALESCE(SUM(reasoning_tokens), 0),
+                COUNT(*),
+                (SELECT COUNT(*) FROM sessions),
+                COUNT(DISTINCT date(occurred_at_unix_ms / 1000, 'unixepoch')),
+                (SELECT COUNT(*) FROM (
+                    SELECT provider, model FROM usage_events GROUP BY provider, model
+                )),
+                COALESCE(SUM(CASE WHEN confidence = 'exact' THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN confidence = 'derived' THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN confidence = 'estimated' THEN 1 ELSE 0 END), 0)
+             FROM usage_events",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)? as u64,
+                    row.get::<_, i64>(1)? as u64,
+                    row.get::<_, i64>(2)? as u64,
+                    row.get::<_, i64>(3)? as u64,
+                    row.get::<_, i64>(4)? as u64,
+                    row.get::<_, i64>(5)? as u64,
+                    row.get::<_, i64>(6)? as u64,
+                    row.get::<_, i64>(7)? as u64,
+                    row.get::<_, i64>(8)? as u64,
+                    row.get::<_, i64>(9)? as u64,
+                    row.get::<_, i64>(10)? as u64,
+                    row.get::<_, i64>(11)? as u64,
+                ))
+            },
+        )?;
+
+        let mut costs = OverviewCostSummary::default();
+        let mut unpriced_events = 0_u64;
+        let mut statement = self.connection.prepare(
+            "SELECT kind, usd FROM event_costs
+             WHERE kind IN ('provider_reported', 'api_equivalent_estimate', 'unpriced')
+             ORDER BY source_object_id, event_id, kind",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Option<f64>>(1)?))
+        })?;
+        for row in rows {
+            let (kind, usd) = row?;
+            match (kind.as_str(), usd) {
+                ("provider_reported", Some(usd)) => {
+                    add_overview_cost(&mut costs.provider_reported_usd, sql_usd_to_nano(usd))?;
+                }
+                ("api_equivalent_estimate", Some(usd)) => {
+                    add_overview_cost(
+                        &mut costs.api_equivalent_estimate_usd,
+                        sql_usd_to_nano(usd),
+                    )?;
+                }
+                ("unpriced", None) => {
+                    unpriced_events = unpriced_events
+                        .checked_add(1)
+                        .ok_or(StorageError::OverviewOverflow)?;
+                }
+                _ => {}
+            }
+        }
+
+        let mut snapshot = OverviewSnapshot {
+            generation: 0,
+            tokens: TokenBreakdown {
+                input,
+                output,
+                cache_read,
+                cache_write,
+                reasoning,
+            },
+            event_count,
+            session_count,
+            active_days,
+            model_count,
+            costs,
+            data_quality: OverviewDataQuality {
+                exact_events,
+                derived_events,
+                estimated_events,
+                unpriced_events,
+            },
+            source_health: self.source_health_snapshot()?,
+        };
+        snapshot.generation = overview_generation(&snapshot);
+        Ok(snapshot)
     }
 
     pub fn rebuild_daily_usage(&mut self) -> Result<()> {
@@ -1303,6 +1412,36 @@ fn warning_is_unsupported(warning: &str) -> bool {
         || normalized.contains("newer than version")
 }
 
+fn overview_generation(snapshot: &OverviewSnapshot) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for value in [
+        snapshot.tokens.input,
+        snapshot.tokens.output,
+        snapshot.tokens.cache_read,
+        snapshot.tokens.cache_write,
+        snapshot.tokens.reasoning,
+        snapshot.event_count,
+        snapshot.session_count,
+        snapshot.active_days,
+        snapshot.model_count,
+        snapshot.data_quality.exact_events,
+        snapshot.data_quality.derived_events,
+        snapshot.data_quality.estimated_events,
+        snapshot.data_quality.unpriced_events,
+        snapshot.source_health.generation,
+    ] {
+        hash_health_bytes(&mut hash, &value.to_le_bytes());
+    }
+    for cost in [
+        snapshot.costs.provider_reported_usd,
+        snapshot.costs.api_equivalent_estimate_usd,
+    ] {
+        hash_health_bytes(&mut hash, &[cost.is_some() as u8]);
+        hash_health_bytes(&mut hash, &cost.map_or(0, NanoUsd::as_nanos).to_le_bytes());
+    }
+    hash
+}
+
 fn health_generation(sources: &[SourceHealth]) -> u64 {
     let mut hash = 0xcbf2_9ce4_8422_2325_u64;
     for source in sources {
@@ -1592,6 +1731,20 @@ fn nano_usd_to_sql(value: NanoUsd) -> Result<f64> {
     Ok(nanos as f64 / 1_000_000_000.0)
 }
 
+fn sql_usd_to_nano(value: f64) -> NanoUsd {
+    NanoUsd::from_nanos((value * 1_000_000_000.0).round() as u64)
+}
+
+fn add_overview_cost(total: &mut Option<NanoUsd>, value: NanoUsd) -> Result<()> {
+    *total = Some(match *total {
+        Some(total) => total
+            .checked_add(value)
+            .ok_or(StorageError::OverviewOverflow)?,
+        None => value,
+    });
+    Ok(())
+}
+
 fn rebuild_daily_usage_in(transaction: &Transaction<'_>) -> Result<()> {
     transaction.execute("DELETE FROM daily_usage_utc", [])?;
     transaction.execute(
@@ -1724,6 +1877,69 @@ mod tests {
                 .unwrap()
                 .contains("\"inserted_records\": 1")
         );
+    }
+
+    #[test]
+    fn overview_snapshot_aggregates_headlines_and_changes_generation() {
+        let mut database = registered_database();
+        let empty = database.overview_snapshot().unwrap();
+        assert_eq!(empty.event_count, 0);
+        assert_eq!(empty.costs.provider_reported_usd, None);
+
+        let mut reported = record("event-overview-1", 1_704_067_200_000, 10);
+        reported.costs.push(provider_cost(1_250_000_000));
+
+        let mut estimated = record("event-overview-2", 1_704_153_600_000, 20);
+        estimated.event.session_id = Some("session-synthetic-002".into());
+        estimated.event.provider = Some("provider-b".into());
+        estimated.event.model = "model-b".into();
+        estimated.event.confidence = DataConfidence::Derived;
+        estimated.costs.push(CostFact {
+            kind: CostKind::ApiEquivalentEstimate,
+            usd: Some(NanoUsd::from_nanos(750_000_000)),
+            confidence: DataConfidence::Exact,
+        });
+
+        let mut unpriced = record("event-overview-3", 1_704_153_600_001, 30);
+        unpriced.event.session_id = None;
+        unpriced.event.provider = Some("provider-b".into());
+        unpriced.event.model = "model-b".into();
+        unpriced.event.confidence = DataConfidence::Estimated;
+        unpriced.costs.push(CostFact {
+            kind: CostKind::Unpriced,
+            usd: None,
+            confidence: DataConfidence::Exact,
+        });
+
+        database
+            .apply_ingest(ingest_request(
+                WriteMode::Append,
+                vec![reported, estimated, unpriced],
+            ))
+            .unwrap();
+        let snapshot = database.overview_snapshot().unwrap();
+
+        assert_ne!(snapshot.generation, empty.generation);
+        assert_eq!(snapshot.tokens.input, 60);
+        assert_eq!(snapshot.tokens.output, 6);
+        assert_eq!(snapshot.event_count, 3);
+        assert_eq!(snapshot.session_count, 2);
+        assert_eq!(snapshot.active_days, 2);
+        assert_eq!(snapshot.model_count, 2);
+        assert_eq!(
+            snapshot.costs.provider_reported_usd,
+            Some(NanoUsd::from_nanos(1_250_000_000))
+        );
+        assert_eq!(
+            snapshot.costs.api_equivalent_estimate_usd,
+            Some(NanoUsd::from_nanos(750_000_000))
+        );
+        assert_eq!(snapshot.data_quality.exact_events, 1);
+        assert_eq!(snapshot.data_quality.derived_events, 1);
+        assert_eq!(snapshot.data_quality.estimated_events, 1);
+        assert_eq!(snapshot.data_quality.unpriced_events, 1);
+        assert_eq!(snapshot.source_health.sources.len(), 1);
+        assert_eq!(snapshot, database.overview_snapshot().unwrap());
     }
 
     #[test]
