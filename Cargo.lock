@@ -134,6 +134,7 @@ name = "agentmeter-app"
 version = "0.1.0"
 dependencies = [
  "agentmeter-core",
+ "agentmeter-pricing",
  "agentmeter-storage",
  "tempfile",
 ]

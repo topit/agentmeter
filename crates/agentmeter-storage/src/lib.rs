@@ -1019,6 +1019,138 @@ impl Database {
         )?;
         Ok(())
     }
+
+    /// Records a dataset in the pricing-snapshot ledger and returns its id.
+    /// Re-recording identical content is idempotent.
+    pub fn record_pricing_snapshot(
+        &self,
+        source: &str,
+        dataset_version: &str,
+        fetched_at_unix_ms: i64,
+        content_hash: &str,
+    ) -> Result<i64> {
+        self.connection.execute(
+            "INSERT OR IGNORE INTO pricing_snapshots (
+                source, dataset_version, fetched_at_unix_ms, content_hash
+             ) VALUES (?1, ?2, ?3, ?4)",
+            params![source, dataset_version, fetched_at_unix_ms, content_hash],
+        )?;
+        self.connection
+            .query_row(
+                "SELECT id FROM pricing_snapshots
+                 WHERE source = ?1 AND dataset_version = ?2 AND content_hash = ?3",
+                params![source, dataset_version, content_hash],
+                |row| row.get(0),
+            )
+            .map_err(Into::into)
+    }
+
+    /// Every canonical event projected for pricing, in deterministic order.
+    pub fn events_for_pricing(&self) -> Result<Vec<PricingEventRow>> {
+        let mut statement = self.connection.prepare(
+            "SELECT source_object_id, event_id, provider, model,
+                    input_tokens, output_tokens, cache_read_tokens,
+                    cache_write_tokens, reasoning_tokens
+             FROM usage_events
+             ORDER BY source_object_id, event_id",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(PricingEventRow {
+                source_object_id: row.get(0)?,
+                event_id: row.get(1)?,
+                provider: row.get(2)?,
+                model: row.get(3)?,
+                tokens: TokenBreakdown {
+                    input: row.get::<_, i64>(4)? as u64,
+                    output: row.get::<_, i64>(5)? as u64,
+                    cache_read: row.get::<_, i64>(6)? as u64,
+                    cache_write: row.get::<_, i64>(7)? as u64,
+                    reasoning: row.get::<_, i64>(8)? as u64,
+                },
+            })
+        })?;
+        let mut events = Vec::new();
+        for row in rows {
+            events.push(row?);
+        }
+        Ok(events)
+    }
+
+    /// Replaces every API-equivalent estimate and unpriced marker in one
+    /// transaction. Provider-reported and subscription-credit facts are
+    /// never touched: estimates are disposable projections of immutable
+    /// token facts, so re-running with a new dataset fully reverses the
+    /// previous run without re-ingesting source logs.
+    pub fn replace_estimate_facts(
+        &mut self,
+        pricing_snapshot_id: i64,
+        facts: &[EstimateFact],
+    ) -> Result<RepriceReport> {
+        let transaction = self.connection.transaction()?;
+        transaction.execute(
+            "DELETE FROM event_costs
+             WHERE kind IN ('api_equivalent_estimate', 'unpriced')",
+            [],
+        )?;
+        let mut report = RepriceReport::default();
+        for fact in facts {
+            let kind = if fact.usd.is_some() {
+                CostKind::ApiEquivalentEstimate
+            } else {
+                CostKind::Unpriced
+            };
+            transaction.execute(
+                "INSERT INTO event_costs (
+                    source_object_id, event_id, kind, usd,
+                    pricing_snapshot_id, pricing_key, pricing_rule, confidence
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'estimated')",
+                params![
+                    fact.source_object_id,
+                    fact.event_id,
+                    cost_kind_str(kind),
+                    fact.usd.map(nano_usd_to_sql).transpose()?,
+                    pricing_snapshot_id,
+                    fact.pricing_key,
+                    fact.pricing_rule,
+                ],
+            )?;
+            if fact.usd.is_some() {
+                report.priced_events += 1;
+            } else {
+                report.unpriced_events += 1;
+            }
+        }
+        transaction.commit()?;
+        Ok(report)
+    }
+}
+
+/// One canonical event projected for pricing.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PricingEventRow {
+    pub source_object_id: String,
+    pub event_id: String,
+    pub provider: Option<String>,
+    pub model: String,
+    pub tokens: TokenBreakdown,
+}
+
+/// A repricing fact: a priced API-equivalent estimate when `usd` is present,
+/// otherwise an explicit unpriced marker so absence never reads as a valid
+/// zero.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EstimateFact {
+    pub source_object_id: String,
+    pub event_id: String,
+    pub usd: Option<NanoUsd>,
+    pub pricing_key: Option<String>,
+    pub pricing_rule: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RepriceReport {
+    pub priced_events: u64,
+    pub unpriced_events: u64,
 }
 
 const PREFERENCES_KEY: &str = "app_preferences";
@@ -1914,9 +2046,9 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        CheckpointStatus, CrossCheckStatus, Database, IngestRequest, ReferenceExpectation,
-        ReferenceKind, SCHEMA_VERSION, SourceRegistration, SourceReportedStatus, StorageError,
-        WriteMode,
+        CheckpointStatus, CrossCheckStatus, Database, EstimateFact, IngestRequest,
+        ReferenceExpectation, ReferenceKind, SCHEMA_VERSION, SourceRegistration,
+        SourceReportedStatus, StorageError, WriteMode,
     };
 
     const SOURCE_ID: &str = "source-synthetic-001";
@@ -2003,6 +2135,148 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn pricing_snapshots_are_idempotent_by_content() {
+        let database = Database::open_in_memory().unwrap();
+
+        let first = database
+            .record_pricing_snapshot("reviewed", "1.0", 1_704_067_200_000, "hash-a")
+            .unwrap();
+        let repeated = database
+            .record_pricing_snapshot("reviewed", "1.0", 1_704_999_999_999, "hash-a")
+            .unwrap();
+        assert_eq!(first, repeated);
+
+        let changed = database
+            .record_pricing_snapshot("reviewed", "1.0", 1_704_999_999_999, "hash-b")
+            .unwrap();
+        assert_ne!(first, changed);
+    }
+
+    #[test]
+    fn repricing_replaces_estimates_and_preserves_provider_reported_facts() {
+        let mut database = registered_database();
+        let mut reported = record("event-reported", 1_704_067_200_000, 10);
+        reported.costs.push(provider_cost(1_000_000_000));
+        let plain = record("event-plain", 1_704_067_200_000, 10);
+        database
+            .apply_ingest(ingest_request(WriteMode::Append, vec![reported, plain]))
+            .unwrap();
+
+        let events = database.events_for_pricing().unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].model, "model-a");
+        assert_eq!(events[0].tokens.input, 10);
+
+        let snapshot = database
+            .record_pricing_snapshot("reviewed", "1.0", 1_704_067_300_000, "hash-a")
+            .unwrap();
+        let report = database
+            .replace_estimate_facts(
+                snapshot,
+                &[
+                    EstimateFact {
+                        source_object_id: SOURCE_ID.into(),
+                        event_id: "event-reported".into(),
+                        usd: Some(NanoUsd::from_nanos(500)),
+                        pricing_key: Some("model-a".into()),
+                        pricing_rule: Some("exact".into()),
+                    },
+                    EstimateFact {
+                        source_object_id: SOURCE_ID.into(),
+                        event_id: "event-plain".into(),
+                        usd: None,
+                        pricing_key: None,
+                        pricing_rule: Some("unpriced:no-match".into()),
+                    },
+                ],
+            )
+            .unwrap();
+        assert_eq!(report.priced_events, 1);
+        assert_eq!(report.unpriced_events, 1);
+
+        let reported_costs = database.event_costs(SOURCE_ID, "event-reported").unwrap();
+        assert_eq!(reported_costs.len(), 2);
+        assert!(
+            reported_costs
+                .iter()
+                .any(|cost| cost.kind == CostKind::ProviderReported)
+        );
+        assert!(
+            reported_costs
+                .iter()
+                .any(|cost| cost.kind == CostKind::ApiEquivalentEstimate
+                    && cost.usd == Some(NanoUsd::from_nanos(500)))
+        );
+        assert_eq!(
+            database
+                .event_costs(SOURCE_ID, "event-plain")
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            database
+                .overview_snapshot()
+                .unwrap()
+                .data_quality
+                .unpriced_events,
+            1,
+            "an unpriced marker must stay visible in data quality"
+        );
+
+        // Repricing with a new dataset fully reverses the previous run.
+        let snapshot_two = database
+            .record_pricing_snapshot("reviewed", "2.0", 1_704_067_400_000, "hash-b")
+            .unwrap();
+        let report_two = database
+            .replace_estimate_facts(
+                snapshot_two,
+                &[
+                    EstimateFact {
+                        source_object_id: SOURCE_ID.into(),
+                        event_id: "event-reported".into(),
+                        usd: Some(NanoUsd::from_nanos(900)),
+                        pricing_key: Some("model-a".into()),
+                        pricing_rule: Some("exact".into()),
+                    },
+                    EstimateFact {
+                        source_object_id: SOURCE_ID.into(),
+                        event_id: "event-plain".into(),
+                        usd: Some(NanoUsd::from_nanos(700)),
+                        pricing_key: Some("model-a".into()),
+                        pricing_rule: Some("exact".into()),
+                    },
+                ],
+            )
+            .unwrap();
+        assert_eq!(report_two.priced_events, 2);
+        assert_eq!(report_two.unpriced_events, 0);
+
+        let reported_costs = database.event_costs(SOURCE_ID, "event-reported").unwrap();
+        assert_eq!(
+            reported_costs.len(),
+            2,
+            "the provider-reported fact survives"
+        );
+        assert!(
+            reported_costs
+                .iter()
+                .any(|cost| cost.kind == CostKind::ApiEquivalentEstimate
+                    && cost.usd == Some(NanoUsd::from_nanos(900)))
+        );
+        let plain_costs = database.event_costs(SOURCE_ID, "event-plain").unwrap();
+        assert_eq!(plain_costs.len(), 1);
+        assert_eq!(
+            database
+                .overview_snapshot()
+                .unwrap()
+                .data_quality
+                .unpriced_events,
+            0
+        );
     }
 
     #[test]
