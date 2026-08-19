@@ -1,6 +1,6 @@
 # AgentMeter product and engineering plan
 
-- Status: M4 complete and CI-verified (five collectors, pricing, views, export); M5 macOS beta next
+- Status: M4 complete and CI-verified; M5 macOS beta in progress — 1.0 is macOS-only (Windows deferred to long-term planning)
 - Product name: AgentMeter
 - Primary platform: macOS
 - Future platform: Windows
@@ -457,12 +457,12 @@ Exit: five complete collectors (DeepSeek Harness moved to v1.1), visible pricing
 
 Exit: representative large histories refresh incrementally, cold rebuild is bounded and cancellable, and beta package passes clean-machine testing.
 
-### M6 — Windows preparation
+### Long-term (post-1.0) — Windows
 
-- Windows path and core CI coverage;
-- assess GPUI Windows shell and platform integrations.
-
-Exit: a Windows go/no-go report identifies remaining platform gaps.
+Deferred from 1.0 on 2026-08-19: Windows is long-term planning, not part of
+the 1.0 line. When it returns: Windows path resolvers and fixture tests,
+portable-crate CI on Windows, and a GPUI Windows shell assessment feeding a
+go/no-go report.
 
 ### v1.1 — Deferred source backlog
 
@@ -509,4 +509,4 @@ These decisions do not block M1 but should be settled before macOS beta:
 
 ## 19. Immediate next implementation step
 
-M4 is complete: five collectors (Amp, Codex CLI/Desktop, Pi, Kimi), reversible pricing with a seeded reviewed dataset, the Activity/Sessions/Models/Pricing views, and the privacy-reviewed JSON/CSV export are all implemented and CI-verified. The milestone moves to M5 (macOS beta): performance and retention work, launch behavior and crash recovery, signing/notarization/packaging with the user's Developer ID certificate, the pre-packaging interactive accessibility pass on a local Mac, and the privacy review plus user documentation. Before M5 exits, recheck the claude-sonnet-4-7 discount (ends 2026-09-30) and rerun the visual matrix.
+Windows moved to long-term planning on 2026-08-19; 1.0 ends at the macOS beta. M5 starts with the ingestion orchestration the read-only UI has been missing: an `IngestionService` in `agentmeter-app` that discovers sources from the enabled adapters (Codex home, Pi sessions, Kimi wire roots), registers installations and sources, resumes from checkpoints (rebuilding on parser-version invalidation), applies adapter batches transactionally, records discovery/parse failures as health diagnostics, and returns a summary the desktop can surface. The desktop wires it to startup collection plus a real rescan command in Sources, refreshing snapshots afterward. Later M5 chunks: performance validation against the section 16 targets with synthetic corpora, cancellable cold rebuild, retention (settle open decision 4: keep history after vendor deletion by default), signing/packaging once the user's Developer ID certificate is available, and the pre-packaging accessibility pass.

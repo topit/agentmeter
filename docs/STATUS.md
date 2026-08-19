@@ -59,6 +59,7 @@ Every commit must include the corresponding update to this file: task status, de
 | M4-07 Sessions view | coordinator | `2a60a1f` | canonical session ledger and cost facts | pushed | source-scoped aggregation tests; stale-result tests; macOS compile; workspace checks | committed and pushed as `45af315`; CI run `32242486063` green; next is Models/Pricing |
 | M4-08 Models/Pricing views | coordinator | `45af315` | model ledger, reviewed rates, and reversible estimates | pushed | model aggregation; pricing provenance; stale-result tests; macOS compile; workspace checks | committed and pushed as `d415dbb`; deferred verification completed 2026-08-19 — full workspace gates (142 tests), CI run `32243890892` green, and reviewed Models/Pricing visual matrices |
 | M4-09 JSON/CSV export | coordinator | `d415dbb` | privacy-reviewed export payload contract | completed | payload privacy tests; exact-decimal tests; stale-result tests; workspace checks | versioned JSON and CSV exports of the canonical event ledger implemented behind explicit Settings actions; the next task reconciles this row with the actual commit and push |
+| M5-01 Ingestion orchestration | coordinator | `ddcfb2e` | collector-to-storage pipeline contracts | in progress | end-to-end ingestion tests; checkpoint resume tests; health diagnostics; workspace checks | build the IngestionService that makes the desktop app collect instead of only read; Windows deferred to long-term planning per the 2026-08-19 decision |
 
 ## Verification contract
 
