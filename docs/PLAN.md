@@ -183,19 +183,21 @@ Recommended SQLite defaults: WAL, foreign keys on, busy timeout, and `synchronou
 
 ## 7. Source roadmap
 
-| Source | Expected local source | Initial strategy | Main risk |
-|---|---|---|---|
-| Amp | data root `threads/*.json` | reconcile `usageLedger` with assistant usage | credits and timestamps are not always dollar/time facts |
-| Codex CLI | `sessions` and `archived_sessions` JSONL | cumulative-to-delta state machine, fork/replay handling | replay and archive duplication |
-| Pi | session JSONL | assistant usage and embedded reported cost | missing provider and timestamp variants |
-| Kimi/Kimi Code | old/new `wire.jsonl` layouts | old status replacement and new turn-scope events | cumulative/session usage duplication |
-| Factory Droid | session settings snapshots | latest snapshot per session | no per-turn history |
-| Grok Build CLI | session `updates.jsonl` + summary | event IDs, model usage, recorded cost | reasoning/output semantics and missing summary |
-| Codex Desktop | probe shared Codex home, then containers | reuse parser only after fixture confirmation | separate/sandboxed storage may differ |
-| Copilot CLI | session state and optional OTel | detect capability and guide setup | telemetry may not exist retrospectively |
-| DeepSeek Harness | unknown until product/fixtures confirmed | dedicated adapter or explicit telemetry integration | no stable generic local contract |
-| Cursor | private DB or explicit export/API cache | research after stable MVP | schema and authentication churn |
-| Grok bot/remote agents | export/API/OTel | opt-in import | no local source on the desktop |
+| Source | Phase | Expected local source | Initial strategy | Main risk |
+|---|---|---|---|---|
+| Amp | done (M2) | data root `threads/*.json` | reconcile `usageLedger` with assistant usage | credits and timestamps are not always dollar/time facts |
+| Codex CLI | done (M2) | `sessions` and `archived_sessions` JSONL | cumulative-to-delta state machine, fork/replay handling | replay and archive duplication |
+| Pi | done (M2) | session JSONL | assistant usage and embedded reported cost | missing provider and timestamp variants |
+| Kimi/Kimi Code | done (M4-01) | old/new `wire.jsonl` layouts | old status replacement and new turn-scope events | cumulative/session usage duplication |
+| Codex Desktop | next (M4-02) | probe shared Codex home, then containers | reuse parser only after fixture confirmation | separate/sandboxed storage may differ |
+| DeepSeek Harness | next (M4-03) | unknown until product/fixtures confirmed | dedicated adapter or explicit telemetry integration | no stable generic local contract |
+| Factory Droid | v1.1 | session settings snapshots | latest snapshot per session | no per-turn history |
+| Grok Build CLI | v1.1 | session `updates.jsonl` + summary | event IDs, model usage, recorded cost | reasoning/output semantics and missing summary |
+| Copilot CLI | v1.1 | session state and optional OTel | detect capability and guide setup | telemetry may not exist retrospectively |
+| Cursor | v1.1 | private DB or explicit export/API cache | research after stable MVP | schema and authentication churn |
+| Grok bot/remote agents | v1.1 | export/API/OTel | opt-in import | no local source on the desktop |
+
+Roadmap order decided 2026-08-19: Codex Desktop and DeepSeek Harness are implemented next (M4-02, M4-03). Factory Droid, Grok Build CLI, Copilot CLI, Cursor, and remote imports are deferred to v1.1, after the v1 scope is complete.
 
 Amp's documented `--stream-json` output is implemented as a separate opt-in, append-only source. It is authoritative for token field names but does not expose event timestamps, model/provider identity, or a native per-event ID. Local `threads/*.json` parsing remains an explicitly experimental path because Amp does not publish that persistence schema; third-party parsers are cross-check evidence, not a compatibility guarantee.
 
@@ -437,7 +439,7 @@ Exit: met. Representative UI states were verified in all four locale/theme combi
 
 ### M4 — Coverage and pricing
 
-- Kimi/Kimi Code, Factory Droid, Grok Build;
+- Kimi/Kimi Code (done), Codex Desktop, DeepSeek Harness;
 - versioned pricing snapshots and reversible estimates;
 - activity, sessions, models, and pricing views;
 - JSON/CSV export.
@@ -453,13 +455,16 @@ Exit: six complete collectors, visible pricing provenance, and no silent unknown
 
 Exit: representative large histories refresh incrementally, cold rebuild is bounded and cancellable, and beta package passes clean-machine testing.
 
-### M6 — Extended sources and Windows preparation
+### M6 — Windows preparation
 
-- investigate Codex Desktop, Copilot CLI, DeepSeek Harness, Cursor, and remote imports;
 - Windows path and core CI coverage;
 - assess GPUI Windows shell and platform integrations.
 
-Exit: source support is based on fixtures/contracts, and a Windows go/no-go report identifies remaining platform gaps.
+Exit: a Windows go/no-go report identifies remaining platform gaps.
+
+### v1.1 — Deferred source backlog
+
+After v1 ships: Factory Droid, Grok Build CLI, Copilot CLI, Cursor, and remote/opt-in imports (see the roadmap table above). Each still enters through the same fixture-first definition of supported.
 
 ## 16. Performance targets
 
@@ -502,4 +507,4 @@ These decisions do not block M1 but should be settled before macOS beta:
 
 ## 19. Immediate next implementation step
 
-M4-01 (Kimi/Kimi Code) is complete. Start M4-02: research Factory Droid's local session settings snapshots from upstream sources, then implement the adapter — latest-snapshot-per-session semantics, bounded replacement strategy for the "no per-turn history" risk, sanitized fixtures for normal/malformed/schema-drift cases, health states, and a storage pipeline cross-check. After Factory Droid, M4-03 covers Grok Build CLI before the pricing-snapshot work.
+M4-01 (Kimi/Kimi Code) is complete. Per the 2026-08-19 roadmap decision, M4-02 is Codex Desktop: research whether the desktop app shares the CLI's Codex home (`~/.codex` sessions/archives) or writes sandboxed/container storage of its own, confirm with synthetic fixtures, and reuse the Codex parser only after the layout is verified. M4-03 is DeepSeek Harness, whose local contract is unknown until product/fixtures confirm it; if no stable local source exists, deliver an explicit, documented telemetry/import integration instead of guessing. Factory Droid, Grok Build CLI, Copilot CLI, Cursor, and remote imports are deferred to v1.1.

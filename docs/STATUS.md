@@ -50,7 +50,8 @@ Every commit must include the corresponding update to this file: task status, de
 | M3-04 Sources presentation | coordinator | `ec266ee` | source-health snapshots | pushed | localized remediation-state tests; stale-result tests; representative UI verification | committed and pushed as `3898451`; native visual validation remains blocked by the missing Metal Toolchain |
 | M3-05 Settings presentation | coordinator | `3898451` | preferences persistence contract | pushed | preference round-trip tests; persistence and stale-save tests; workspace checks | committed and pushed as `b28fea0` |
 | M3-06 CI native validation | coordinator | `b28fea0` | public-repository CI budget | pushed | green macOS runner runs; reviewed screenshot matrix artifacts | committed and pushed as `9952d9a` and `e597ab0`; evidence recorded in `9c2eb9d` whose CI run is green; M3 exited |
-| M4-01 Kimi/Kimi Code adapter | coordinator | `9c2eb9d` | upstream wire.jsonl format research | completed | fixture and cross-check suite; storage pipeline; workspace checks | Kimi wire adapter implemented for both legacy and current layouts; the next task reconciles this row with the actual commit and push |
+| M4-01 Kimi/Kimi Code adapter | coordinator | `9c2eb9d` | upstream wire.jsonl format research | pushed | fixture and cross-check suite; storage pipeline; workspace checks | committed and pushed as `8cf9974`; CI run `32207108342` green on Linux and macOS |
+| M4-02 Codex Desktop adapter | coordinator | `8cf9974` | shared Codex home / container storage research | in progress | fixture and cross-check suite; storage pipeline; workspace checks | roadmap reordered 2026-08-19: Codex Desktop next; Factory Droid, Grok Build, Copilot CLI, Cursor, and remote imports deferred to v1.1 |
 
 ## Verification contract
 
@@ -258,13 +259,13 @@ Every commit must include the corresponding update to this file: task status, de
 
 ## Development handoff
 
-Handoff point: the M4-01 Kimi adapter commit on GitHub `topit/agentmeter`, branch `main`, written directly after `9c2eb9d`. The next task begins by reconciling this commit's push result and the CI run, then starts M4-02 (Factory Droid adapter).
+Handoff point: the roadmap-reorder commit on GitHub `topit/agentmeter`, branch `main`, written directly after `8cf9974`. M4-01 was reconciled to `8cf9974` with CI run `32207108342` green. The next task is M4-02 (Codex Desktop adapter).
 
 ### Product and implementation state
 
 - M1 and M2 are complete. The canonical SQLite ledger, reference ingestion contracts, Amp/Codex/Pi collectors, source-health model, provider-reported costs, reconciliation reports, Codex compressed rollouts, and Pi legacy/current discovery are implemented with synthetic fixture coverage.
 - M3 is complete and exited. GPUI is pinned to Zed revision `c24358d96cdb4ce14ecbc088462295353b0103f0`; the shell, Overview, Sources, and Settings are implemented and verified on hosted Apple Silicon runners with the full locale/theme visual matrix (see the M3-06 evidence). CI reruns the Linux gates, the production-feature macOS gates, and the matrix on every push to `main`.
-- M4-01 (Kimi/Kimi Code) is implemented: both `wire.jsonl` layouts, delta semantics, duplicate handling, and the storage pipeline are covered by synthetic fixtures. The next bounded task is M4-02, the Factory Droid adapter (session settings snapshots, latest-per-session semantics per `docs/PLAN.md` section 7).
+- M4-01 (Kimi/Kimi Code) is implemented: both `wire.jsonl` layouts, delta semantics, duplicate handling, and the storage pipeline are covered by synthetic fixtures. Roadmap decision 2026-08-19: the next bounded tasks are M4-02 (Codex Desktop — probe the shared Codex home and container storage, reuse the Codex parser only after fixture confirmation) and M4-03 (DeepSeek Harness — local contract unknown; deliver an explicit documented integration rather than guessing if no stable local source exists). Factory Droid, Grok Build CLI, Copilot CLI, Cursor, and remote imports are deferred to v1.1 per `docs/PLAN.md` section 7.
 
 ### Ownership map for the next task
 
