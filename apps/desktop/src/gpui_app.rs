@@ -20,7 +20,7 @@ use gpui::{
 
 pub fn run() {
     gpui_platform::application().run(|cx: &mut App| {
-        let bounds = Bounds::centered(None, size(px(1_120.0), px(720.0)), cx);
+        let bounds = Bounds::centered(None, size(px(960.0), px(720.0)), cx);
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
