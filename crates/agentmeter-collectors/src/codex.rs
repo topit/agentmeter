@@ -23,7 +23,7 @@ use crate::{
     },
 };
 
-const PARSER_VERSION: u32 = 3;
+const PARSER_VERSION: u32 = 4;
 const SCHEMA_VARIANT: &str = "codex-rollout-jsonl-v2";
 
 #[derive(Clone, Debug)]
@@ -395,6 +395,7 @@ struct RolloutPayload {
     history_base: Option<HistoryBase>,
     #[serde(deserialize_with = "deserialize_source_tag")]
     source: Option<String>,
+    originator: Option<String>,
     model_provider: Option<String>,
     model: Option<String>,
     info: Option<TokenUsageInfo>,
@@ -518,6 +519,9 @@ struct ParserState {
     forked_from_id: Option<String>,
     model: Option<String>,
     provider: Option<String>,
+    client: Option<String>,
+    session_source: Option<String>,
+    originator: Option<String>,
     previous_total: Option<RawUsage>,
     seen_session_meta: bool,
     unsupported_source: bool,
@@ -541,18 +545,26 @@ fn process_envelope(
         "session_meta" => {
             if !state.seen_session_meta {
                 state.seen_session_meta = true;
-                if envelope
-                    .payload
-                    .source
+                let source = envelope.payload.source.clone();
+                if source
                     .as_deref()
-                    .is_some_and(|source| !matches!(source, "cli" | "exec"))
+                    .is_some_and(|source| !is_interactive_source(source))
                 {
                     state.unsupported_source = true;
                     warnings.push(
-                        "Codex rollout belongs to a non-CLI session source; usage was skipped"
+                        "Codex rollout belongs to a non-interactive session source; usage was skipped"
                             .to_owned(),
                     );
                 }
+                state.session_source = source;
+                state.originator = envelope.payload.originator.clone();
+                state.client = Some(
+                    classify_client(
+                        state.session_source.as_deref().unwrap_or("cli"),
+                        state.originator.as_deref(),
+                    )
+                    .to_owned(),
+                );
                 state.thread_id = envelope
                     .payload
                     .id
@@ -757,6 +769,17 @@ fn finish_usage(
         normalization_notes
             .push("lineage could not be resolved exactly; usage was retained".to_owned());
     }
+    let client = state
+        .client
+        .clone()
+        .unwrap_or_else(|| "codex-cli".to_owned());
+    if client != "codex-cli" {
+        normalization_notes.push(format!(
+            "attributed to client {client} from session source {} and originator {}",
+            state.session_source.as_deref().unwrap_or("unknown"),
+            state.originator.as_deref().unwrap_or("unknown"),
+        ));
+    }
 
     let thread_id = state.thread_id.as_deref().unwrap_or(source_key);
     let identity = ordinal.map_or_else(
@@ -779,7 +802,7 @@ fn finish_usage(
             ),
             source_id: String::new(),
             session_id: Some(thread_id.to_owned()),
-            client: "codex-cli".to_owned(),
+            client,
             provider: state.provider.clone(),
             model: state.model.clone().unwrap_or_else(|| "unknown".to_owned()),
             occurred_at_unix_ms,
@@ -819,6 +842,26 @@ where
             Some(_) => Some("non_cli".to_owned()),
         },
     )
+}
+
+/// Mirrors upstream `INTERACTIVE_SESSION_SOURCES`: first-party interactive
+/// surfaces whose rollouts carry user-facing usage. Service sessions (for
+/// example `mcp`) stay excluded.
+fn is_interactive_source(source: &str) -> bool {
+    matches!(source, "cli" | "exec" | "vscode" | "chatgpt" | "atlas")
+}
+
+/// Desktop and IDE-extension rollouts share the CLI store but identify
+/// themselves through `session_meta.payload.originator`; the `vscode` source
+/// tag alone cannot separate the desktop app from the IDE extension.
+/// Third-party harnesses keep the CLI client label with their originator
+/// retained in provenance.
+fn classify_client(source: &str, originator: Option<&str>) -> &'static str {
+    match originator {
+        Some("Codex Desktop") => "codex-desktop",
+        Some("codex_vscode") | None if source == "vscode" => "codex-vscode",
+        _ => "codex-cli",
+    }
 }
 
 fn read_first_metadata(path: &Path) -> Option<SessionMetadata> {
@@ -1122,8 +1165,14 @@ mod tests {
     }
 
     #[test]
-    fn exec_uses_cli_contract_while_non_cli_rollouts_are_deferred() {
-        for (source_tag, expected_records) in [("exec", 1), ("vscode", 0)] {
+    fn interactive_sources_are_ingested_while_service_sources_are_skipped() {
+        for (source_tag, expected_records) in [
+            ("exec", 1),
+            ("vscode", 1),
+            ("chatgpt", 1),
+            ("atlas", 1),
+            ("mcp", 0),
+        ] {
             let mut file = NamedTempFile::new().unwrap();
             writeln!(
                 file,
@@ -1148,8 +1197,74 @@ mod tests {
             };
 
             let batch = adapter.ingest(&source, IngestStart::Fresh).unwrap();
-            assert_eq!(batch.records.len(), expected_records);
-            assert_eq!(batch.warnings.is_empty(), source_tag == "exec");
+            assert_eq!(batch.records.len(), expected_records, "source {source_tag}");
+            assert_eq!(
+                batch.warnings.is_empty(),
+                expected_records == 1,
+                "source {source_tag}"
+            );
+        }
+    }
+
+    #[test]
+    fn desktop_and_ide_rollouts_get_client_attribution() {
+        for (originator, source_tag, expected_client) in [
+            (Some("Codex Desktop"), "vscode", "codex-desktop"),
+            (Some("codex_vscode"), "vscode", "codex-vscode"),
+            (None, "vscode", "codex-vscode"),
+            (Some("waku"), "cli", "codex-cli"),
+            (None, "cli", "codex-cli"),
+        ] {
+            let mut payload = serde_json::json!({
+                "id":"thread-synthetic-client","source":source_tag,
+                "model_provider":"openai"
+            });
+            if let Some(originator) = originator {
+                payload["originator"] = serde_json::json!(originator);
+            }
+            let mut file = NamedTempFile::new().unwrap();
+            writeln!(
+                file,
+                "{}",
+                serde_json::json!({
+                    "timestamp":"2024-01-01T00:00:00Z","ordinal":0,
+                    "type":"session_meta","payload":payload
+                })
+            )
+            .unwrap();
+            writeln!(file, "{TURN}").unwrap();
+            writeln!(file, "{}", token(2, 100, 50)).unwrap();
+            file.flush().unwrap();
+            let adapter = CodexJsonlAdapter::new("unused");
+            let source = crate::SourceCandidate {
+                path: file.path().to_owned(),
+                kind: crate::SourceKind::AppendOnlyJsonl,
+                source_key: "rollout-synthetic.jsonl".into(),
+            };
+
+            let batch = adapter.ingest(&source, IngestStart::Fresh).unwrap();
+            assert_eq!(batch.records.len(), 1, "originator {originator:?}");
+            assert_eq!(
+                batch.records[0].event.client, expected_client,
+                "originator {originator:?}"
+            );
+            if expected_client == "codex-cli" {
+                assert!(
+                    !batch.records[0]
+                        .provenance
+                        .normalization_notes
+                        .iter()
+                        .any(|note| note.contains("attributed to client"))
+                );
+            } else {
+                assert!(
+                    batch.records[0]
+                        .provenance
+                        .normalization_notes
+                        .iter()
+                        .any(|note| note.contains("attributed to client"))
+                );
+            }
         }
     }
 

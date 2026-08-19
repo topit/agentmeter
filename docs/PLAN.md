@@ -189,7 +189,7 @@ Recommended SQLite defaults: WAL, foreign keys on, busy timeout, and `synchronou
 | Codex CLI | done (M2) | `sessions` and `archived_sessions` JSONL | cumulative-to-delta state machine, fork/replay handling | replay and archive duplication |
 | Pi | done (M2) | session JSONL | assistant usage and embedded reported cost | missing provider and timestamp variants |
 | Kimi/Kimi Code | done (M4-01) | old/new `wire.jsonl` layouts | old status replacement and new turn-scope events | cumulative/session usage duplication |
-| Codex Desktop | next (M4-02) | probe shared Codex home, then containers | reuse parser only after fixture confirmation | separate/sandboxed storage may differ |
+| Codex Desktop | done (M4-02) | probe shared Codex home, then containers | reuse parser only after fixture confirmation | separate/sandboxed storage may differ |
 | DeepSeek Harness | next (M4-03) | unknown until product/fixtures confirmed | dedicated adapter or explicit telemetry integration | no stable generic local contract |
 | Factory Droid | v1.1 | session settings snapshots | latest snapshot per session | no per-turn history |
 | Grok Build CLI | v1.1 | session `updates.jsonl` + summary | event IDs, model usage, recorded cost | reasoning/output semantics and missing summary |
@@ -202,6 +202,8 @@ Roadmap order decided 2026-08-19: Codex Desktop and DeepSeek Harness are impleme
 Amp's documented `--stream-json` output is implemented as a separate opt-in, append-only source. It is authoritative for token field names but does not expose event timestamps, model/provider identity, or a native per-event ID. Local `threads/*.json` parsing remains an explicitly experimental path because Amp does not publish that persistence schema; third-party parsers are cross-check evidence, not a compatibility guarantee.
 
 Kimi/Kimi Code is implemented for both upstream `wire.jsonl` layouts (`kimi-cli` `StatusUpdate` records and `kimi-code` flat `usage.record` records). Both report one delta per LLM request; session-scoped records are real spend and are counted, diverging from ccusage/tokscale, which skip them. Cross-file fork copies are not yet deduplicated and are recorded as follow-up work in `docs/STATUS.md`.
+
+Codex Desktop is implemented through the existing Codex adapter: the desktop app shares `~/.codex` with the CLI and writes identical rollouts, distinguished by `session_meta.payload.originator`. Interactive session sources (`cli`, `exec`, `vscode`, `chatgpt`, `atlas`) are accepted; clients are attributed as `codex-desktop`/`codex-vscode`/`codex-cli` from the originator, with the raw values kept in provenance.
 
 ### Definition of supported
 
@@ -507,4 +509,4 @@ These decisions do not block M1 but should be settled before macOS beta:
 
 ## 19. Immediate next implementation step
 
-M4-01 (Kimi/Kimi Code) is complete. Per the 2026-08-19 roadmap decision, M4-02 is Codex Desktop: research whether the desktop app shares the CLI's Codex home (`~/.codex` sessions/archives) or writes sandboxed/container storage of its own, confirm with synthetic fixtures, and reuse the Codex parser only after the layout is verified. M4-03 is DeepSeek Harness, whose local contract is unknown until product/fixtures confirm it; if no stable local source exists, deliver an explicit, documented telemetry/import integration instead of guessing. Factory Droid, Grok Build CLI, Copilot CLI, Cursor, and remote imports are deferred to v1.1.
+M4-02 (Codex Desktop) is complete — the desktop app shares the CLI store, so the adapter change was accepting interactive session sources with originator-based client attribution (parser version 4 rebuilds existing checkpoints). Start M4-03: DeepSeek Harness. Its local contract is unknown until product/fixtures confirm it; research first, and if no stable local source exists, deliver an explicit, documented telemetry/import integration instead of guessing. After M4-03, the remaining M4 scope is pricing snapshots and reversible estimates, the activity/sessions/models/pricing views, and JSON/CSV export.

@@ -51,7 +51,7 @@ Every commit must include the corresponding update to this file: task status, de
 | M3-05 Settings presentation | coordinator | `3898451` | preferences persistence contract | pushed | preference round-trip tests; persistence and stale-save tests; workspace checks | committed and pushed as `b28fea0` |
 | M3-06 CI native validation | coordinator | `b28fea0` | public-repository CI budget | pushed | green macOS runner runs; reviewed screenshot matrix artifacts | committed and pushed as `9952d9a` and `e597ab0`; evidence recorded in `9c2eb9d` whose CI run is green; M3 exited |
 | M4-01 Kimi/Kimi Code adapter | coordinator | `9c2eb9d` | upstream wire.jsonl format research | pushed | fixture and cross-check suite; storage pipeline; workspace checks | committed and pushed as `8cf9974`; CI run `32207108342` green on Linux and macOS |
-| M4-02 Codex Desktop adapter | coordinator | `8cf9974` | shared Codex home / container storage research | in progress | fixture and cross-check suite; storage pipeline; workspace checks | roadmap reordered 2026-08-19: Codex Desktop next; Factory Droid, Grok Build, Copilot CLI, Cursor, and remote imports deferred to v1.1 |
+| M4-02 Codex Desktop adapter | coordinator | `8cf9974` | shared Codex home / container storage research | completed | fixture and cross-check suite; storage pipeline; workspace checks | Codex Desktop verified to share the CLI store; interactive sources accepted with originator-based client attribution; the next task reconciles this row with the actual commit and push |
 
 ## Verification contract
 
@@ -257,15 +257,25 @@ Every commit must include the corresponding update to this file: task status, de
 - `cargo fmt --all --check`, `cargo check --workspace --all-targets`, `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, and `git diff --check` passed on the user's Mac with the temporary local-only `runtime_shaders` bypass, reverted before committing.
 - Tests: 120 total (110 unit tests and 10 collector-to-storage integration tests), including the Kimi adapter fixture suite (discovery for both layouts and subagents, delta parsing, duplicate/step-end handling, symbolic-model fallback, timestamp fallback, zero/malformed/truncated cases, append resume, migration rewrite, parser-state resume) and the collector-to-storage pipeline asserting exact canonical daily totals and a fixture cross-check.
 
+## M4-02 verification evidence
+
+- Research (verified from openai/codex source at HEAD plus a real desktop installation): the Codex desktop app drives the shared `app-server` daemon and persists through the same `LocalThreadStore`/`RolloutRecorder` path under the same `CODEX_HOME` (`~/.codex`), producing identical rollout JSONL and `.jsonl.zst` files. No new adapter or discovery root is needed. Desktop sessions are distinguished by `session_meta.payload.originator == "Codex Desktop"` with `source == "vscode"` (the app-server default, shared with the IDE extension, so `source` alone cannot separate them).
+- The adapter now accepts upstream's interactive session sources (`cli`, `exec`, `vscode`, `chatgpt`, `atlas`, mirroring upstream `INTERACTIVE_SESSION_SOURCES`); service sources such as `mcp` remain skipped with a visible warning. Behavior for `cli`/`exec` sessions is unchanged.
+- Client attribution: `originator` `Codex Desktop` → `codex-desktop`; `codex_vscode` or a bare `vscode` source → `codex-vscode`; everything else (including third-party harness originators such as `waku`) keeps `codex-cli`, with the raw source and originator recorded in provenance notes whenever attribution differs from the CLI.
+- Parser version 4 invalidates Codex checkpoints so existing installations transactionally rebuild and pick up previously skipped desktop and IDE sessions.
+- A sanitized Factory Droid research note (v1.1 backlog) is archived at `docs/research/factory-droid.md`; its key facts are cumulative per-session snapshots in `<sessionId>.settings.json` under `~/.factory/sessions`, own-totals-only ingestion to avoid subagent double counting, and mtime-based recency.
+- `cargo fmt --all --check`, `cargo check --workspace --all-targets`, `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, and `git diff --check` passed on the user's Mac with the temporary local-only `runtime_shaders` bypass, reverted before committing.
+- Tests: 121 total (111 unit tests and 10 collector-to-storage integration tests), including new interactive-source matrix and client-attribution fixtures (desktop, IDE extension, absent originator, third-party originator, CLI baseline) and the unchanged Codex pipeline suite.
+
 ## Development handoff
 
-Handoff point: the roadmap-reorder commit on GitHub `topit/agentmeter`, branch `main`, written directly after `8cf9974`. M4-01 was reconciled to `8cf9974` with CI run `32207108342` green. The next task is M4-02 (Codex Desktop adapter).
+Handoff point: the M4-02 Codex Desktop commit on GitHub `topit/agentmeter`, branch `main`, written directly after `6a90eae`. M4-01 was reconciled to `8cf9974` with CI run `32207108342` green. The next task begins by reconciling M4-02 with its commit and CI run, then starts M4-03 (DeepSeek Harness).
 
 ### Product and implementation state
 
 - M1 and M2 are complete. The canonical SQLite ledger, reference ingestion contracts, Amp/Codex/Pi collectors, source-health model, provider-reported costs, reconciliation reports, Codex compressed rollouts, and Pi legacy/current discovery are implemented with synthetic fixture coverage.
 - M3 is complete and exited. GPUI is pinned to Zed revision `c24358d96cdb4ce14ecbc088462295353b0103f0`; the shell, Overview, Sources, and Settings are implemented and verified on hosted Apple Silicon runners with the full locale/theme visual matrix (see the M3-06 evidence). CI reruns the Linux gates, the production-feature macOS gates, and the matrix on every push to `main`.
-- M4-01 (Kimi/Kimi Code) is implemented: both `wire.jsonl` layouts, delta semantics, duplicate handling, and the storage pipeline are covered by synthetic fixtures. Roadmap decision 2026-08-19: the next bounded tasks are M4-02 (Codex Desktop — probe the shared Codex home and container storage, reuse the Codex parser only after fixture confirmation) and M4-03 (DeepSeek Harness — local contract unknown; deliver an explicit documented integration rather than guessing if no stable local source exists). Factory Droid, Grok Build CLI, Copilot CLI, Cursor, and remote imports are deferred to v1.1 per `docs/PLAN.md` section 7.
+- M4-01 (Kimi/Kimi Code) and M4-02 (Codex Desktop) are implemented. Codex Desktop shares the CLI store; the adapter accepts interactive session sources and attributes clients from the session originator. Roadmap decision 2026-08-19: the next bounded task is M4-03 (DeepSeek Harness — local contract unknown; deliver an explicit documented integration rather than guessing if no stable local source exists). Factory Droid, Grok Build CLI, Copilot CLI, Cursor, and remote imports are deferred to v1.1 per `docs/PLAN.md` section 7; the Factory Droid research is archived at `docs/research/factory-droid.md`.
 
 ### Ownership map for the next task
 
@@ -300,7 +310,7 @@ Native launch and visual acceptance remain blocked on the user's Mac: the Metal 
 
 ### Workflow constraints
 
-- Reconcile the preceding ledger row with its actual commit at the start of every task; M4-01 was reconciled to `8cf9974` with CI run `32207108342` green.
+- Reconcile the preceding ledger row with its actual commit at the start of every task; M4-01 was reconciled to `8cf9974` with CI run `32207108342` green, and M4-02 still needs reconciliation.
 - Update this file before every commit. Update `docs/PLAN.md` in the same commit whenever scope, roadmap order, acceptance criteria, or the immediate next step changes.
 - Commit each completed step and push only to GitHub `main`. In this checkout the GitHub remote is named `origin` (`git@github.com:topit/agentmeter.git`); port-22 SSH hangs on this network, so push through `ssh://git@ssh.github.com:443/topit/agentmeter.git` until the proxy forwards port 22.
 - Use synthetic fixtures only. Never read or commit real agent histories, prompts, responses, tool payloads, account IDs, secrets, or real home paths.
