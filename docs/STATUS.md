@@ -300,7 +300,7 @@ Native launch and visual acceptance remain blocked on the user's Mac: the Metal 
 
 ### Workflow constraints
 
-- Reconcile the preceding ledger row with its actual commit at the start of every task; M3-06 was reconciled to `9c2eb9d`, and M4-01 still needs reconciliation with its commit and CI run.
+- Reconcile the preceding ledger row with its actual commit at the start of every task; M4-01 was reconciled to `8cf9974` with CI run `32207108342` green.
 - Update this file before every commit. Update `docs/PLAN.md` in the same commit whenever scope, roadmap order, acceptance criteria, or the immediate next step changes.
 - Commit each completed step and push only to GitHub `main`. In this checkout the GitHub remote is named `origin` (`git@github.com:topit/agentmeter.git`); port-22 SSH hangs on this network, so push through `ssh://git@ssh.github.com:443/topit/agentmeter.git` until the proxy forwards port 22.
 - Use synthetic fixtures only. Never read or commit real agent histories, prompts, responses, tool payloads, account IDs, secrets, or real home paths.
