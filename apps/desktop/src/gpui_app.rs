@@ -1,13 +1,17 @@
-use std::path::PathBuf;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::PathBuf,
+};
 
 use agentmeter_core::{
     AppPreferences, AppearancePreference, LanguagePreference, SourceHealthState,
 };
 use agentmeter_desktop::{
-    LocalDataErrorKind, Locale, MessageKey, OverviewLoadState, OverviewService, OverviewState,
-    PreferencesService, Route, SettingsLoadState, SettingsState, ShellState, SourceCard,
-    SourcesLoadState, SourcesService, SourcesState, ThemeMode, ThemePalette, appearance_option_key,
-    language_option_key, resolved_locale, resolved_theme_mode,
+    ActivityDimension, ActivityGranularity, ActivityLoadState, ActivityMetric, ActivityService,
+    ActivityState, LocalDataErrorKind, Locale, MessageKey, OverviewLoadState, OverviewService,
+    OverviewState, PreferencesService, Route, SettingsLoadState, SettingsState, ShellState,
+    SourceCard, SourcesLoadState, SourcesService, SourcesState, ThemeMode, ThemePalette,
+    appearance_option_key, language_option_key, resolved_locale, resolved_theme_mode,
 };
 use gpui::{
     AnyElement, App, Bounds, Context, IntoElement, Render, Task, TitlebarOptions, Window,
@@ -37,6 +41,8 @@ struct NavigationShell {
     state: ShellState,
     overview: OverviewState,
     _overview_task: Task<()>,
+    activity: ActivityState,
+    _activity_task: Task<()>,
     sources: SourcesState,
     _sources_task: Task<()>,
     settings: SettingsState,
@@ -83,6 +89,30 @@ impl NavigationShell {
                     }
                     Err(error) => {
                         this.overview.apply_error(request, error);
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        });
+
+        let mut activity = ActivityState::default();
+        let request = activity.begin_request(ActivityGranularity::Daily, ActivityDimension::Client);
+        let load = cx.background_executor().spawn(async move {
+            let data_directory = macos_data_directory()?;
+            ActivityService::in_data_directory(data_directory)
+                .load(ActivityGranularity::Daily, ActivityDimension::Client)
+                .map_err(|error| error.kind())
+        });
+        let activity_task = cx.spawn(async move |this, cx| {
+            let result = load.await;
+            this.update(cx, |this, cx| {
+                match result {
+                    Ok(snapshot) => {
+                        this.activity.apply_snapshot(request, snapshot);
+                    }
+                    Err(error) => {
+                        this.activity.apply_error(request, error);
                     }
                 }
                 cx.notify();
@@ -144,6 +174,8 @@ impl NavigationShell {
             state,
             overview,
             _overview_task: overview_task,
+            activity,
+            _activity_task: activity_task,
             sources,
             _sources_task: sources_task,
             settings,
@@ -160,6 +192,37 @@ impl NavigationShell {
             .set_locale(resolved_locale(self.system_locale, preferences.language));
         self.state
             .set_theme_mode(resolved_theme_mode(preferences.appearance));
+    }
+
+    fn reload_activity(
+        &mut self,
+        granularity: ActivityGranularity,
+        dimension: ActivityDimension,
+        cx: &mut Context<Self>,
+    ) {
+        let request = self.activity.begin_request(granularity, dimension);
+        let load = cx.background_executor().spawn(async move {
+            let data_directory = macos_data_directory()?;
+            ActivityService::in_data_directory(data_directory)
+                .load(granularity, dimension)
+                .map_err(|error| error.kind())
+        });
+        cx.spawn(async move |this, cx| {
+            let result = load.await;
+            this.update(cx, |this, cx| {
+                match result {
+                    Ok(snapshot) => {
+                        this.activity.apply_snapshot(request, snapshot);
+                    }
+                    Err(error) => {
+                        this.activity.apply_error(request, error);
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Persists the complete preference snapshot off the render path. The
@@ -284,6 +347,383 @@ impl NavigationShell {
                 self.overview_metrics(palette).into_any_element()
             }
         }
+    }
+
+    fn activity_content(&self, palette: ThemePalette, cx: &mut Context<Self>) -> AnyElement {
+        let locale = self.state.locale();
+        let body = match self.activity.load_state() {
+            ActivityLoadState::Loading => div()
+                .mt_4()
+                .text_color(rgb(palette.muted_text))
+                .child(locale.text(MessageKey::ActivityLoading))
+                .into_any_element(),
+            ActivityLoadState::Empty => div()
+                .mt_4()
+                .max_w(px(640.0))
+                .p_6()
+                .rounded_lg()
+                .border_1()
+                .border_color(rgb(palette.border))
+                .bg(rgb(palette.surface))
+                .child(
+                    div()
+                        .text_lg()
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .child(locale.text(MessageKey::ActivityEmptyTitle)),
+                )
+                .child(
+                    div()
+                        .mt_2()
+                        .text_color(rgb(palette.muted_text))
+                        .child(locale.text(MessageKey::ActivityEmptyBody)),
+                )
+                .into_any_element(),
+            ActivityLoadState::Error(error) => {
+                let message = match error {
+                    LocalDataErrorKind::DataDirectory => MessageKey::OverviewDataDirectoryError,
+                    LocalDataErrorKind::Database => MessageKey::OverviewDatabaseError,
+                };
+                div()
+                    .mt_4()
+                    .max_w(px(640.0))
+                    .p_6()
+                    .rounded_lg()
+                    .border_1()
+                    .border_color(rgb(palette.border))
+                    .bg(rgb(palette.surface))
+                    .child(
+                        div()
+                            .text_lg()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child(locale.text(MessageKey::ActivityErrorTitle)),
+                    )
+                    .child(
+                        div()
+                            .mt_2()
+                            .text_color(rgb(palette.muted_text))
+                            .child(locale.text(message)),
+                    )
+                    .into_any_element()
+            }
+            ActivityLoadState::Populated => self.activity_chart(palette),
+        };
+        div()
+            .mt_5()
+            .child(self.activity_controls(palette, cx))
+            .child(body)
+            .into_any_element()
+    }
+
+    fn activity_controls(&self, palette: ThemePalette, cx: &mut Context<Self>) -> AnyElement {
+        let locale = self.state.locale();
+        div()
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .gap_6()
+            .child(
+                div()
+                    .child(locale.text(MessageKey::ActivityGranularity))
+                    .child(div().mt_2().flex().gap_2().children([
+                        self.activity_granularity_option(
+                            ActivityGranularity::Daily,
+                            MessageKey::ActivityDaily,
+                            palette,
+                            cx,
+                        ),
+                        self.activity_granularity_option(
+                            ActivityGranularity::Weekly,
+                            MessageKey::ActivityWeekly,
+                            palette,
+                            cx,
+                        ),
+                        self.activity_granularity_option(
+                            ActivityGranularity::Monthly,
+                            MessageKey::ActivityMonthly,
+                            palette,
+                            cx,
+                        ),
+                    ])),
+            )
+            .child(div().child(locale.text(MessageKey::ActivityMetric)).child(
+                div().mt_2().flex().gap_2().children([
+                    self.activity_metric_option(
+                        ActivityMetric::Tokens,
+                        MessageKey::ActivityTokens,
+                        palette,
+                        cx,
+                    ),
+                    self.activity_metric_option(
+                        ActivityMetric::Cost,
+                        MessageKey::ActivityCost,
+                        palette,
+                        cx,
+                    ),
+                ]),
+            ))
+            .child(div().child(locale.text(MessageKey::ActivityGroupBy)).child(
+                div().mt_2().flex().gap_2().children([
+                    self.activity_dimension_option(
+                        ActivityDimension::Client,
+                        MessageKey::ActivityClient,
+                        palette,
+                        cx,
+                    ),
+                    self.activity_dimension_option(
+                        ActivityDimension::Provider,
+                        MessageKey::ActivityProvider,
+                        palette,
+                        cx,
+                    ),
+                    self.activity_dimension_option(
+                        ActivityDimension::Model,
+                        MessageKey::ActivityModel,
+                        palette,
+                        cx,
+                    ),
+                ]),
+            ))
+            .into_any_element()
+    }
+
+    fn activity_granularity_option(
+        &self,
+        value: ActivityGranularity,
+        label: MessageKey,
+        palette: ThemePalette,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let selected = self.activity.granularity() == value;
+        let id = match value {
+            ActivityGranularity::Daily => "activity-daily",
+            ActivityGranularity::Weekly => "activity-weekly",
+            ActivityGranularity::Monthly => "activity-monthly",
+        };
+        let label = self.state.locale().text(label);
+        activity_option(id, label, selected, palette)
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.reload_activity(value, this.activity.dimension(), cx);
+            }))
+            .into_any_element()
+    }
+
+    fn activity_dimension_option(
+        &self,
+        value: ActivityDimension,
+        label: MessageKey,
+        palette: ThemePalette,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let selected = self.activity.dimension() == value;
+        let id = match value {
+            ActivityDimension::Client => "activity-client",
+            ActivityDimension::Provider => "activity-provider",
+            ActivityDimension::Model => "activity-model",
+        };
+        let label = self.state.locale().text(label);
+        activity_option(id, label, selected, palette)
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.reload_activity(this.activity.granularity(), value, cx);
+            }))
+            .into_any_element()
+    }
+
+    fn activity_metric_option(
+        &self,
+        value: ActivityMetric,
+        label: MessageKey,
+        palette: ThemePalette,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let selected = self.activity.metric() == value;
+        let id = match value {
+            ActivityMetric::Tokens => "activity-tokens",
+            ActivityMetric::Cost => "activity-cost",
+        };
+        let label = self.state.locale().text(label);
+        activity_option(id, label, selected, palette)
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.activity.set_metric(value);
+                cx.notify();
+            }))
+            .into_any_element()
+    }
+
+    fn activity_chart(&self, palette: ThemePalette) -> AnyElement {
+        let locale = self.state.locale();
+        let snapshot = self
+            .activity
+            .snapshot()
+            .expect("populated activity state must contain a snapshot");
+        let periods: Vec<&str> = snapshot
+            .points
+            .iter()
+            .map(|point| point.period_start_utc.as_str())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .rev()
+            .take(8)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        let metric = self.activity.metric();
+        let raw_value = |point: &agentmeter_desktop::ActivityPoint| match metric {
+            ActivityMetric::Tokens => point.tokens,
+            ActivityMetric::Cost => point
+                .api_equivalent_estimate_usd
+                .map_or(0, agentmeter_core::NanoUsd::as_nanos),
+        };
+        let period_totals: BTreeMap<&str, u64> = periods
+            .iter()
+            .map(|period| {
+                let total = snapshot
+                    .points
+                    .iter()
+                    .filter(|point| point.period_start_utc == *period)
+                    .map(&raw_value)
+                    .fold(0_u64, |total, value| {
+                        total
+                            .checked_add(value)
+                            .expect("validated activity period total overflowed")
+                    });
+                (*period, total)
+            })
+            .collect();
+        let maximum = period_totals.values().copied().max().unwrap_or(1).max(1);
+        let series: Vec<&str> = snapshot
+            .points
+            .iter()
+            .map(|point| point.series.as_str())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let rows: Vec<AnyElement> = periods
+            .into_iter()
+            .map(|period| {
+                let points: Vec<_> = snapshot
+                    .points
+                    .iter()
+                    .filter(|point| point.period_start_utc == period)
+                    .collect();
+                let total = period_totals[period];
+                let total_value = match metric {
+                    ActivityMetric::Tokens => locale.format_count(total),
+                    ActivityMetric::Cost
+                        if points
+                            .iter()
+                            .any(|point| point.api_equivalent_estimate_usd.is_some()) =>
+                    {
+                        locale.format_usd(agentmeter_core::NanoUsd::from_nanos(total))
+                    }
+                    ActivityMetric::Cost => locale.text(MessageKey::NotAvailable).to_owned(),
+                };
+                let segments: Vec<AnyElement> = points
+                    .iter()
+                    .map(|point| {
+                        let value = raw_value(point);
+                        let width = if value == 0 {
+                            0.0
+                        } else {
+                            (value as f64 / maximum as f64 * 360.0).max(3.0) as f32
+                        };
+                        let color_index = series
+                            .iter()
+                            .position(|series| *series == point.series)
+                            .unwrap_or(0)
+                            % palette.series.len();
+                        div()
+                            .h(px(12.0))
+                            .w(px(width))
+                            .bg(rgb(palette.series[color_index]))
+                            .into_any_element()
+                    })
+                    .collect();
+                let legends: Vec<AnyElement> = points
+                    .iter()
+                    .map(|point| {
+                        let value = match metric {
+                            ActivityMetric::Tokens => locale.format_count(point.tokens),
+                            ActivityMetric::Cost => point
+                                .api_equivalent_estimate_usd
+                                .map(|cost| locale.format_usd(cost))
+                                .unwrap_or_else(|| {
+                                    locale.text(MessageKey::NotAvailable).to_owned()
+                                }),
+                        };
+                        let label = if point.series.is_empty() {
+                            locale.text(MessageKey::NotAvailable)
+                        } else {
+                            point.series.as_str()
+                        };
+                        let color_index = series
+                            .iter()
+                            .position(|series| *series == point.series)
+                            .unwrap_or(0)
+                            % palette.series.len();
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .size(px(8.0))
+                                    .rounded_sm()
+                                    .bg(rgb(palette.series[color_index])),
+                            )
+                            .child(format!("{label}: {value}"))
+                            .into_any_element()
+                    })
+                    .collect();
+                div()
+                    .py_3()
+                    .border_b_1()
+                    .border_color(rgb(palette.border))
+                    .child(
+                        div()
+                            .flex()
+                            .justify_between()
+                            .child(period.to_owned())
+                            .child(total_value),
+                    )
+                    .child(
+                        div()
+                            .mt_2()
+                            .h(px(12.0))
+                            .flex()
+                            .rounded_sm()
+                            .overflow_hidden()
+                            .children(segments),
+                    )
+                    .child(div().mt_2().flex().flex_wrap().gap_3().children(legends))
+                    .when(
+                        points.iter().any(|point| point.unpriced_event_count != 0),
+                        |element| {
+                            element.child(
+                                div()
+                                    .mt_1()
+                                    .text_sm()
+                                    .text_color(rgb(palette.warning))
+                                    .child(locale.text(MessageKey::ActivityUnpriced)),
+                            )
+                        },
+                    )
+                    .into_any_element()
+            })
+            .collect();
+        div()
+            .id("activity-chart")
+            .mt_4()
+            .max_w(px(720.0))
+            .max_h(px(430.0))
+            .overflow_y_scroll()
+            .p_4()
+            .rounded_lg()
+            .border_1()
+            .border_color(rgb(palette.border))
+            .bg(rgb(palette.surface))
+            .children(rows)
+            .into_any_element()
     }
 
     fn sources_content(&self, palette: ThemePalette) -> AnyElement {
@@ -662,6 +1102,8 @@ impl Render for NavigationShell {
             .child({
                 let content = if selected == Route::Overview {
                     self.overview_content(palette)
+                } else if selected == Route::Activity {
+                    self.activity_content(palette, cx)
                 } else if selected == Route::Sources {
                     self.sources_content(palette)
                 } else if selected == Route::Settings {
@@ -711,6 +1153,41 @@ fn metric_card(label: &'static str, value: String, palette: ThemePalette) -> imp
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .child(value),
         )
+}
+
+fn activity_option(
+    id: &'static str,
+    label: &'static str,
+    selected: bool,
+    palette: ThemePalette,
+) -> gpui::Stateful<gpui::Div> {
+    let option = div()
+        .id(id)
+        .focusable()
+        .tab_stop(true)
+        .role(gpui::Role::Button)
+        .aria_label(label)
+        .px_3()
+        .py_2()
+        .rounded_md()
+        .border_1()
+        .border_color(rgb(if selected {
+            palette.accent
+        } else {
+            palette.border
+        }))
+        .cursor_pointer()
+        .focus_visible(move |style| style.border_2().border_color(rgb(palette.focus_ring)))
+        .child(label);
+    if selected {
+        option
+            .bg(rgb(palette.accent))
+            .text_color(rgb(palette.accent_text))
+    } else {
+        option
+            .text_color(rgb(palette.text))
+            .hover(move |style| style.bg(rgb(palette.hover)))
+    }
 }
 
 /// Maps a typed source state to a semantic palette color. The status label is

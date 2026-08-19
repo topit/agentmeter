@@ -172,6 +172,8 @@ pub enum StorageError {
     ReconciliationOverflow,
     #[error("usage or cost totals overflowed while building an overview snapshot")]
     OverviewOverflow,
+    #[error("usage or cost totals overflowed while building an activity snapshot")]
+    ActivityOverflow,
     #[error("stored {field} preference has an unsupported value: {value}")]
     InvalidPreference { field: &'static str, value: String },
     #[error("failed to serialize diagnostics: {0}")]
@@ -790,6 +792,58 @@ impl Database {
                     reasoning: row.get::<_, i64>(8)? as u64,
                 },
                 event_count: row.get::<_, i64>(9)? as u64,
+            })
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    /// Daily UTC facts used by higher-level activity queries. Cost remains an
+    /// explicit API-equivalent estimate; events without a reviewed rate are
+    /// counted separately instead of becoming a valid zero.
+    pub fn activity_daily_rows(&self) -> Result<Vec<ActivityDailyRow>> {
+        let mut statement = self.connection.prepare(
+            "SELECT date(event.occurred_at_unix_ms / 1000, 'unixepoch'),
+                    date(event.occurred_at_unix_ms / 1000, 'unixepoch',
+                         printf('-%d days', (strftime('%w', event.occurred_at_unix_ms / 1000,
+                         'unixepoch') + 6) % 7)),
+                    strftime('%Y-%m-01', event.occurred_at_unix_ms / 1000, 'unixepoch'),
+                    event.client, event.provider, event.model,
+                    SUM(event.input_tokens), SUM(event.output_tokens),
+                    SUM(event.cache_read_tokens), SUM(event.cache_write_tokens),
+                    SUM(event.reasoning_tokens), COUNT(*),
+                    SUM(CASE WHEN cost.kind = 'api_equivalent_estimate'
+                        THEN CAST(ROUND(cost.usd * 1000000000) AS INTEGER) END),
+                    COALESCE(SUM(CASE WHEN cost.kind = 'unpriced' THEN 1 ELSE 0 END), 0)
+             FROM usage_events AS event
+             LEFT JOIN event_costs AS cost
+               ON cost.source_object_id = event.source_object_id
+              AND cost.event_id = event.event_id
+              AND cost.kind IN ('api_equivalent_estimate', 'unpriced')
+             GROUP BY date(event.occurred_at_unix_ms / 1000, 'unixepoch'),
+                      event.client, event.provider, event.model
+             ORDER BY 1, 2, 3, 4",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(ActivityDailyRow {
+                day: row.get(0)?,
+                week_start: row.get(1)?,
+                month_start: row.get(2)?,
+                client: row.get(3)?,
+                provider: nonempty(row.get(4)?),
+                model: row.get(5)?,
+                tokens: TokenBreakdown {
+                    input: row.get::<_, i64>(6)? as u64,
+                    output: row.get::<_, i64>(7)? as u64,
+                    cache_read: row.get::<_, i64>(8)? as u64,
+                    cache_write: row.get::<_, i64>(9)? as u64,
+                    reasoning: row.get::<_, i64>(10)? as u64,
+                },
+                event_count: row.get::<_, i64>(11)? as u64,
+                api_equivalent_estimate_usd: row
+                    .get::<_, Option<i64>>(12)?
+                    .map(|nanos| NanoUsd::from_nanos(nanos as u64)),
+                unpriced_event_count: row.get::<_, i64>(13)? as u64,
             })
         })?;
         rows.collect::<std::result::Result<Vec<_>, _>>()
@@ -1545,6 +1599,20 @@ pub struct DailyUsage {
     pub model: String,
     pub tokens: TokenBreakdown,
     pub event_count: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ActivityDailyRow {
+    pub day: String,
+    pub week_start: String,
+    pub month_start: String,
+    pub client: String,
+    pub provider: Option<String>,
+    pub model: String,
+    pub tokens: TokenBreakdown,
+    pub event_count: u64,
+    pub api_equivalent_estimate_usd: Option<NanoUsd>,
+    pub unpriced_event_count: u64,
 }
 
 fn upsert_installation(

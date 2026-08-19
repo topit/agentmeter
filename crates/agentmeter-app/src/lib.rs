@@ -1,8 +1,13 @@
 //! Application services that coordinate portable AgentMeter core crates.
 
-use std::path::{Path, PathBuf};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
 
-use agentmeter_core::{AppPreferences, OverviewSnapshot, SourceHealthSnapshot};
+use agentmeter_core::{
+    AppPreferences, NanoUsd, OverviewSnapshot, SourceHealthSnapshot, TokenBreakdown,
+};
 use agentmeter_pricing::RateDataset;
 use agentmeter_storage::{Database, EstimateFact, StorageError};
 
@@ -31,6 +36,205 @@ impl OverviewService {
         open_local_database(&self.database_path)?
             .overview_snapshot()
             .map_err(LocalDataServiceError::Database)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ActivityGranularity {
+    #[default]
+    Daily,
+    Weekly,
+    Monthly,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ActivityDimension {
+    #[default]
+    Client,
+    Provider,
+    Model,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ActivityPoint {
+    pub period_start_utc: String,
+    /// Empty only when the selected source dimension is absent.
+    pub series: String,
+    pub tokens: u64,
+    pub api_equivalent_estimate_usd: Option<NanoUsd>,
+    pub event_count: u64,
+    pub unpriced_event_count: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ActivitySnapshot {
+    pub generation: u64,
+    pub granularity: ActivityGranularity,
+    pub dimension: ActivityDimension,
+    pub points: Vec<ActivityPoint>,
+}
+
+/// Immutable UTC activity series for the Activity screen.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ActivityService {
+    database_path: PathBuf,
+}
+
+impl ActivityService {
+    pub fn in_data_directory(data_directory: impl AsRef<Path>) -> Self {
+        Self {
+            database_path: local_database_path(data_directory.as_ref()),
+        }
+    }
+
+    pub fn load(
+        &self,
+        granularity: ActivityGranularity,
+        dimension: ActivityDimension,
+    ) -> Result<ActivitySnapshot, LocalDataServiceError> {
+        let rows = open_local_database(&self.database_path)?
+            .activity_daily_rows()
+            .map_err(LocalDataServiceError::Database)?;
+        let mut points = BTreeMap::<(String, String), ActivityAccumulator>::new();
+        for row in rows {
+            let period = match granularity {
+                ActivityGranularity::Daily => row.day,
+                ActivityGranularity::Weekly => row.week_start,
+                ActivityGranularity::Monthly => row.month_start,
+            };
+            let series = match dimension {
+                ActivityDimension::Client => row.client,
+                ActivityDimension::Provider => row.provider.unwrap_or_default(),
+                ActivityDimension::Model => row.model,
+            };
+            points
+                .entry((period, series))
+                .or_default()
+                .add(
+                    row.tokens,
+                    row.api_equivalent_estimate_usd,
+                    row.event_count,
+                    row.unpriced_event_count,
+                )
+                .map_err(LocalDataServiceError::Database)?;
+        }
+        let points: Vec<ActivityPoint> = points
+            .into_iter()
+            .map(|((period_start_utc, series), point)| ActivityPoint {
+                period_start_utc,
+                series,
+                tokens: point.tokens,
+                api_equivalent_estimate_usd: point.cost,
+                event_count: point.event_count,
+                unpriced_event_count: point.unpriced_event_count,
+            })
+            .collect();
+        validate_activity_period_totals(&points).map_err(LocalDataServiceError::Database)?;
+        Ok(ActivitySnapshot {
+            generation: activity_generation(granularity, dimension, &points),
+            granularity,
+            dimension,
+            points,
+        })
+    }
+}
+
+fn validate_activity_period_totals(points: &[ActivityPoint]) -> Result<(), StorageError> {
+    let mut totals = BTreeMap::<&str, (u64, u64)>::new();
+    for point in points {
+        let total = totals.entry(point.period_start_utc.as_str()).or_default();
+        total.0 = total
+            .0
+            .checked_add(point.tokens)
+            .ok_or(StorageError::ActivityOverflow)?;
+        total.1 = total
+            .1
+            .checked_add(
+                point
+                    .api_equivalent_estimate_usd
+                    .map_or(0, NanoUsd::as_nanos),
+            )
+            .ok_or(StorageError::ActivityOverflow)?;
+    }
+    Ok(())
+}
+
+#[derive(Default)]
+struct ActivityAccumulator {
+    tokens: u64,
+    cost: Option<NanoUsd>,
+    event_count: u64,
+    unpriced_event_count: u64,
+}
+
+impl ActivityAccumulator {
+    fn add(
+        &mut self,
+        tokens: TokenBreakdown,
+        cost: Option<NanoUsd>,
+        event_count: u64,
+        unpriced_event_count: u64,
+    ) -> Result<(), StorageError> {
+        self.tokens = self
+            .tokens
+            .checked_add(
+                tokens
+                    .checked_total()
+                    .ok_or(StorageError::ActivityOverflow)?,
+            )
+            .ok_or(StorageError::ActivityOverflow)?;
+        if let Some(cost) = cost {
+            self.cost = Some(match self.cost {
+                Some(total) => total
+                    .checked_add(cost)
+                    .ok_or(StorageError::ActivityOverflow)?,
+                None => cost,
+            });
+        }
+        self.event_count = self
+            .event_count
+            .checked_add(event_count)
+            .ok_or(StorageError::ActivityOverflow)?;
+        self.unpriced_event_count = self
+            .unpriced_event_count
+            .checked_add(unpriced_event_count)
+            .ok_or(StorageError::ActivityOverflow)?;
+        Ok(())
+    }
+}
+
+fn activity_generation(
+    granularity: ActivityGranularity,
+    dimension: ActivityDimension,
+    points: &[ActivityPoint],
+) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    hash_activity_bytes(&mut hash, &[granularity as u8, dimension as u8]);
+    for point in points {
+        hash_activity_bytes(&mut hash, point.period_start_utc.as_bytes());
+        hash_activity_bytes(&mut hash, point.series.as_bytes());
+        for value in [
+            point.tokens,
+            point
+                .api_equivalent_estimate_usd
+                .map_or(0, NanoUsd::as_nanos),
+            point.event_count,
+            point.unpriced_event_count,
+        ] {
+            hash_activity_bytes(&mut hash, &value.to_le_bytes());
+        }
+        hash_activity_bytes(
+            &mut hash,
+            &[point.api_equivalent_estimate_usd.is_some() as u8],
+        );
+    }
+    hash
+}
+
+fn hash_activity_bytes(hash: &mut u64, bytes: &[u8]) {
+    for byte in bytes {
+        *hash ^= u64::from(*byte);
+        *hash = hash.wrapping_mul(0x100_0000_01b3);
     }
 }
 
@@ -183,7 +387,8 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        LocalDataErrorKind, OverviewService, PreferencesService, PricingService, SourcesService,
+        ActivityDimension, ActivityGranularity, ActivityService, LocalDataErrorKind,
+        OverviewService, PreferencesService, PricingService, SourcesService,
     };
     use agentmeter_pricing::RateDataset;
 
@@ -274,6 +479,88 @@ mod tests {
                 .unwrap(),
             preferences,
             "preferences must survive a fresh service and connection"
+        );
+    }
+
+    #[test]
+    fn aggregates_activity_by_utc_period_and_dimension_without_hiding_unpriced_events() {
+        let directory = tempdir().unwrap();
+        let database_path = directory.path().join("AgentMeter/agentmeter.db");
+        std::fs::create_dir_all(database_path.parent().unwrap()).unwrap();
+        let mut database = Database::open(&database_path).unwrap();
+        database
+            .register_source(&SourceRegistration {
+                installation_id: "installation-activity".into(),
+                source_object_id: "source-pricing".into(),
+                adapter_id: "reference-jsonl".into(),
+                platform: "test".into(),
+                root_path: "/fixture/home/reference".into(),
+                discovery_method: "fixture".into(),
+                native_path: "/fixture/home/reference/events.jsonl".into(),
+                kind: "append_only_jsonl".into(),
+            })
+            .unwrap();
+        let mut sunday = pricing_record("event-sunday", "model-a");
+        sunday.event.occurred_at_unix_ms = 1_704_585_600_000; // 2024-01-07 UTC
+        sunday.event.client = "client-a".into();
+        sunday.event.provider = Some("provider-a".into());
+        sunday.costs.push(CostFact {
+            kind: CostKind::ApiEquivalentEstimate,
+            usd: Some(NanoUsd::from_nanos(100_000_000)),
+            confidence: DataConfidence::Estimated,
+        });
+        let mut monday = pricing_record("event-monday", "model-b");
+        monday.event.occurred_at_unix_ms = 1_704_672_000_000; // 2024-01-08 UTC
+        monday.event.client = "client-a".into();
+        monday.event.provider = Some("provider-b".into());
+        monday.costs.push(CostFact {
+            kind: CostKind::Unpriced,
+            usd: None,
+            confidence: DataConfidence::Estimated,
+        });
+        database
+            .apply_ingest(IngestRequest {
+                source_object_id: "source-pricing".into(),
+                parser_version: 1,
+                mode: WriteMode::Append,
+                source_fingerprint: "fingerprint-activity".into(),
+                source_len: 256,
+                byte_offset: Some(256),
+                prefix_fingerprint: Some("prefix-activity".into()),
+                parser_state: Vec::new(),
+                observed_at_unix_ms: 1_704_672_000_000,
+                records: vec![sunday, monday],
+                warnings: Vec::new(),
+            })
+            .unwrap();
+
+        let service = ActivityService::in_data_directory(directory.path());
+        let weekly = service
+            .load(ActivityGranularity::Weekly, ActivityDimension::Client)
+            .unwrap();
+        assert_eq!(weekly.points.len(), 2, "Monday starts a new UTC week");
+        assert_eq!(weekly.points[0].period_start_utc, "2024-01-01");
+        assert_eq!(weekly.points[1].period_start_utc, "2024-01-08");
+        assert_eq!(weekly.points[0].tokens, 10);
+        assert_eq!(
+            weekly.points[0].api_equivalent_estimate_usd,
+            Some(NanoUsd::from_nanos(100_000_000))
+        );
+        assert_eq!(weekly.points[1].api_equivalent_estimate_usd, None);
+        assert_eq!(weekly.points[1].unpriced_event_count, 1);
+
+        let by_provider = service
+            .load(ActivityGranularity::Monthly, ActivityDimension::Provider)
+            .unwrap();
+        assert_eq!(by_provider.points.len(), 2);
+        assert_eq!(by_provider.points[0].period_start_utc, "2024-01-01");
+        assert_eq!(by_provider.points[0].series, "provider-a");
+        assert_eq!(by_provider.points[1].series, "provider-b");
+        assert_eq!(
+            by_provider,
+            service
+                .load(ActivityGranularity::Monthly, ActivityDimension::Provider)
+                .unwrap()
         );
     }
 

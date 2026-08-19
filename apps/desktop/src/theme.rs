@@ -39,6 +39,7 @@ impl ResolvedTheme {
                 warning: 0x9a6700,
                 danger: 0xcf222e,
                 info: 0x0969da,
+                series: [0x1677d2, 0x1a7f37, 0x9a6700, 0x8250df, 0xcf222e, 0x0f766e],
             },
             Self::Dark => ThemePalette {
                 background: 0x151617,
@@ -54,6 +55,7 @@ impl ResolvedTheme {
                 warning: 0xd29922,
                 danger: 0xf85149,
                 info: 0x58a6ff,
+                series: [0x57a8f5, 0x3fb950, 0xd29922, 0xbc8cff, 0xf85149, 0x39c5cf],
             },
         }
     }
@@ -76,6 +78,7 @@ pub struct ThemePalette {
     pub warning: u32,
     pub danger: u32,
     pub info: u32,
+    pub series: [u32; 6],
 }
 
 #[cfg(test)]
@@ -120,6 +123,11 @@ mod tests {
                     *color, palette.surface,
                     "status must be visible on surfaces"
                 );
+            }
+            for (index, color) in palette.series.iter().enumerate() {
+                assert!(!palette.series[..index].contains(color));
+                assert_ne!(*color, palette.background);
+                assert_ne!(*color, palette.surface);
             }
         }
     }

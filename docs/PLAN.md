@@ -443,7 +443,7 @@ Exit: met. Representative UI states were verified in all four locale/theme combi
 
 - Kimi/Kimi Code (done), Codex Desktop (done);
 - versioned pricing snapshots and reversible estimates;
-- activity, sessions, models, and pricing views;
+- activity (done), sessions, models, and pricing views;
 - JSON/CSV export.
 
 Exit: five complete collectors (DeepSeek Harness moved to v1.1), visible pricing provenance, and no silent unknown pricing.
@@ -509,4 +509,4 @@ These decisions do not block M1 but should be settled before macOS beta:
 
 ## 19. Immediate next implementation step
 
-M4-04 (pricing core) and M4-05 (seeded rate dataset `2026-08-19.1`, every rate sourced from an official pricing page in `docs/research/rates-2026-08-19.md`) are complete. Next is M4-06, the Activity view: daily/weekly/monthly aggregation over the canonical ledger with a tokens/cost toggle and stacking by client, provider, or model — an immutable query service in `agentmeter-app`, a portable presentation state with stale-result rejection, and a localized GPUI route following the Overview/Sources pattern. Then come the Sessions, Models/Pricing views and JSON/CSV export. Adapter work stays in the v1.1 backlog; recheck the claude-sonnet-4-7 discount before 2026-09-30.
+M4-06 is complete: Activity provides daily/weekly/monthly UTC aggregation over the canonical ledger, tokens/API-equivalent-estimate switching, and stacked client/provider/model series through an immutable query service, stale-result-safe portable state, and localized GPUI route. Next is the Sessions view: immutable session summaries with duration, project, client, provider/model, token and cost totals, plus provenance and confidence without displaying prompt or response content. Then come Models/Pricing and JSON/CSV export. Adapter work stays in the v1.1 backlog; recheck the claude-sonnet-4-7 discount before 2026-09-30.

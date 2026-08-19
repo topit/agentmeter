@@ -16,9 +16,9 @@ Every commit must include the corresponding update to this file: task status, de
 
 ## Operational reality
 
-- Base revision: `3898451` (`Render source health in the Sources view`)
-- Branch: `main`, tracking GitHub `origin/main` at `topit/agentmeter`; M1, M2, and M3-01 through M3-03 have been pushed
-- The earlier Amp-hosted remote is no longer configured in this checkout; pushes go to `origin`
+- Base revision: `35d1901` (`Seed the bundled rate dataset from official pricing`)
+- Branch: `main`, tracking GitHub `github/main` at `topit/agentmeter`; M1 through M4-05 have been pushed
+- The Amp-hosted remote is configured as `origin` for fetches only; pushes go to `github`
 - Toolchain: Rust 1.96.0; repository checks are defined in `AGENTS.md`
 - Database runtime selected for M1: bundled SQLite through `rusqlite`; no external database service
 
@@ -54,7 +54,8 @@ Every commit must include the corresponding update to this file: task status, de
 | M4-02 Codex Desktop adapter | coordinator | `8cf9974` | shared Codex home / container storage research | pushed | fixture and cross-check suite; storage pipeline; workspace checks | committed and pushed as `ef26398`; CI run `32208756268` green |
 | M4-03 DeepSeek Harness | coordinator | `ef26398` | local contract research | deferred to v1.1 | research verdict; fixtures or documented explicit integration | user confirmed the product is the `@deepseek-ai/dsh` npm CLI (`dsh`); deferred 2026-08-19 to finish v1 core scope first; format research archived at `docs/research/deepseek-harness.md` |
 | M4-04 Pricing snapshots and estimates | coordinator | `addcd76` | reviewed rate dataset | pushed | exact-integer estimate tests; matching precedence tests; repricing storage tests | committed and pushed as `3bf7a68`; CI run `32226694932` green |
-| M4-05 Seed rate dataset | coordinator | `3bf7a68` | official pricing pages | completed | per-rate official sources; integer conversion tests; workspace checks | bundled dataset `2026-08-19.1` seeded from verified official pages; the next task reconciles this row with the actual commit and push |
+| M4-05 Seed rate dataset | coordinator | `3bf7a68` | official pricing pages | pushed | per-rate official sources; integer conversion tests; workspace checks | committed and pushed as `35d1901`; CI run `32228441956` green |
+| M4-06 Activity view | coordinator | `35d1901` | canonical ledger and reversible estimates | completed | UTC aggregation tests; stale-result tests; macOS compile; workspace checks | daily/weekly/monthly token and API-estimate series implemented; the next task reconciles this row with the actual commit, push, CI matrix, and artifacts |
 
 ## Verification contract
 
@@ -290,24 +291,31 @@ Every commit must include the corresponding update to this file: task status, de
 - Tests: 131 total (121 unit and 10 integration) — the bundled-dataset test now verifies seeded rates, alias pricing through `kimi-for-coding`, integral $56.25 conversion, and that unlisted models remain unpriced.
 - `cargo fmt --all --check`, `cargo check --workspace --all-targets`, `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, and `git diff --check` passed on the user's Mac with the temporary local-only `runtime_shaders` bypass, reverted before committing.
 
+## M4-06 verification evidence
+
+- Storage projects canonical events into exact daily UTC activity rows. The application service deterministically rolls those rows into Monday-based weekly or calendar-month buckets and groups by client, provider, or model. Token and API-equivalent estimate totals use checked integer arithmetic; absent rates remain `None` with an explicit unpriced-event count rather than becoming zero.
+- Desktop presentation state owns daily/weekly/monthly, tokens/cost, and client/provider/model selections. Time and dimension changes load immutable snapshots off the render path and reject stale completions; the metric toggle reuses the loaded snapshot. The GPUI route renders accessible controls and stacked, labeled series with semantic colors in both themes. English and Simplified Chinese cover loading, empty, error, control, estimate, and unpriced states.
+- The GitHub macOS visual matrix now captures a synthetic populated Activity view in all four locale/theme combinations without reading local Agent histories. The same synthetic rows are deleted after each capture.
+- Orb verification passed: `cargo fmt --all --check`, `cargo check --workspace --all-targets`, `cargo test --workspace` (135 tests: 125 unit tests and 10 collector-to-storage integration tests), `cargo clippy --workspace --all-targets -- -D warnings`, and `git diff --check`.
+- Apple Silicon macOS validation passed with Rust 1.96.0 after the known local-only `runtime_shaders` bypass: workspace check and Clippy passed, and all 29 desktop tests passed. The bypass was not added to the candidate. This validation found and resolved the Activity scroll container's missing stable element ID before completion.
+
 ## Development handoff
 
-Handoff point: the M4-05 seed dataset commit on GitHub `topit/agentmeter`, branch `main`, written directly after `3bf7a68`. M4-04 was reconciled to `3bf7a68` with CI run `32226694932` green. The next task begins by reconciling M4-05 with its commit and CI run, then starts M4-06 (Activity view).
+Handoff point: the completed M4-06 Activity view candidate, based on `35d1901` on GitHub `topit/agentmeter`, branch `main`. M4-05 was reconciled to `35d1901` with CI run `32228441956` green. The next task begins by reconciling M4-06 with its commit, push, and CI evidence, then starts the Sessions view.
 
 ### Product and implementation state
 
 - M1 and M2 are complete. The canonical SQLite ledger, reference ingestion contracts, Amp/Codex/Pi collectors, source-health model, provider-reported costs, reconciliation reports, Codex compressed rollouts, and Pi legacy/current discovery are implemented with synthetic fixture coverage.
 - M3 is complete and exited. GPUI is pinned to Zed revision `c24358d96cdb4ce14ecbc088462295353b0103f0`; the shell, Overview, Sources, and Settings are implemented and verified on hosted Apple Silicon runners with the full locale/theme visual matrix (see the M3-06 evidence). CI reruns the Linux gates, the production-feature macOS gates, and the matrix on every push to `main`.
-- M4-01 (Kimi/Kimi Code), M4-02 (Codex Desktop), M4-04 (pricing core), and M4-05 (seeded rate dataset `2026-08-19.1` from verified official pages, sources in `docs/research/rates-2026-08-19.md`) are complete. Roadmap decision 2026-08-19: DeepSeek Harness (`dsh`) joined the v1.1 backlog (research archived at `docs/research/deepseek-harness.md`, alongside `docs/research/factory-droid.md`). The next bounded tasks are the remaining M4 core scope: the Activity/Sessions/Models/Pricing views and JSON/CSV export.
+- M4-01 (Kimi/Kimi Code), M4-02 (Codex Desktop), M4-04 (pricing core), M4-05 (seeded rate dataset `2026-08-19.1`), and M4-06 (Activity) are complete. Roadmap decision 2026-08-19: DeepSeek Harness (`dsh`) joined the v1.1 backlog (research archived at `docs/research/deepseek-harness.md`, alongside `docs/research/factory-droid.md`). The next bounded tasks are the remaining M4 core scope: Sessions, Models/Pricing, and JSON/CSV export.
 
 ### Ownership map for the next task
 
-- `crates/agentmeter-core/src/lib.rs`: portable domain contracts, including `SourceHealth`, `SourceHealthSnapshot`, typed states, permissions, remediation, and `AppPreferences`.
-- `crates/agentmeter-storage/src/lib.rs`: `Database::source_health_snapshot()` and `Database::preferences()`/`set_preferences()`; preferences live in the v1 key-value `preferences` table as one JSON document under the `app_preferences` key.
-- `crates/agentmeter-app/src/lib.rs`: application-service boundary for the local database lifecycle (`LocalDataErrorKind`/`LocalDataServiceError`) with `OverviewService`, `SourcesService`, and `PreferencesService`. All filesystem and database work belongs here, never in GPUI or desktop presentation state.
-- `apps/desktop/src/overview.rs`, `sources.rs`, and `settings.rs`: reference patterns for single-use request generations, stale completion rejection, optimistic selection, and loading/empty/partial/error classification.
-- `apps/desktop/src/i18n.rs`: typed exhaustive English and Simplified Chinese catalog, including permission, preference-option, and UTC timestamp helpers.
-- `apps/desktop/src/gpui_app.rs`: the shell with Overview, Sources, and Settings rendering. Keep filesystem/database work on `background_executor`; apply results through the entity context. Views must use `ThemePalette` semantic tokens, not literal colors.
+- `crates/agentmeter-storage/src/lib.rs`: the v1 `sessions`, `usage_events`, provenance, and cost tables own session facts; add one deterministic summary query rather than querying SQLite from presentation code.
+- `crates/agentmeter-app/src/lib.rs`: follow `ActivityService` for immutable local-database snapshots, checked aggregation, and presentation-safe error classification.
+- `apps/desktop/src/activity.rs`, `overview.rs`, and `sources.rs`: reference patterns for request generations, stale completion rejection, and loading/empty/error classification.
+- `apps/desktop/src/i18n.rs`: typed exhaustive English and Simplified Chinese catalog; session fields, confidence, empty/error states, and accessibility labels need both locales.
+- `apps/desktop/src/gpui_app.rs`: Sessions is currently a placeholder route. Keep its query on `background_executor`, apply only immutable results through the entity context, and use `ThemePalette` semantic tokens.
 
 ### M3 status: exited via CI evidence
 
@@ -333,9 +341,9 @@ Native launch and visual acceptance remain blocked on the user's Mac: the Metal 
 
 ### Workflow constraints
 
-- Reconcile the preceding ledger row with its actual commit at the start of every task; M4-01 was reconciled to `8cf9974` with CI run `32207108342` green, and M4-02 still needs reconciliation.
+- Reconcile the preceding ledger row with its actual commit and CI run at the start of every task; M4-05 is reconciled to `35d1901` with CI run `32228441956` green.
 - Update this file before every commit. Update `docs/PLAN.md` in the same commit whenever scope, roadmap order, acceptance criteria, or the immediate next step changes.
-- Commit each completed step and push only to GitHub `main`. In this checkout the GitHub remote is named `origin` (`git@github.com:topit/agentmeter.git`); port-22 SSH hangs on this network, so push through `ssh://git@ssh.github.com:443/topit/agentmeter.git` until the proxy forwards port 22.
+- Commit each completed step and push only to GitHub `main`. In this checkout the GitHub remote is named `github`; `origin` is the Amp-hosted read-only remote.
 - Use synthetic fixtures only. Never read or commit real agent histories, prompts, responses, tool payloads, account IDs, secrets, or real home paths.
 - Do not call a client supported until every acceptance criterion in `docs/PLAN.md` is met.
 

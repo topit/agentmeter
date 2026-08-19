@@ -1,3 +1,4 @@
+mod activity;
 mod i18n;
 mod overview;
 mod settings;
@@ -5,7 +6,9 @@ mod shell;
 mod sources;
 mod theme;
 
+pub use activity::{ActivityLoadState, ActivityMetric, ActivityRequest, ActivityState};
 pub use agentmeter_app::{
+    ActivityDimension, ActivityGranularity, ActivityPoint, ActivityService, ActivitySnapshot,
     LocalDataErrorKind, LocalDataServiceError, OverviewService, PreferencesService, SourcesService,
 };
 pub use i18n::{

@@ -4,6 +4,7 @@ use crate::{Locale, MessageKey, ResolvedTheme, ThemeMode, ThemePalette};
 pub enum Route {
     #[default]
     Overview,
+    Activity,
     Sessions,
     Sources,
     Models,
@@ -12,8 +13,9 @@ pub enum Route {
 }
 
 impl Route {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Overview,
+        Self::Activity,
         Self::Sessions,
         Self::Sources,
         Self::Models,
@@ -24,6 +26,7 @@ impl Route {
     pub const fn message_key(self) -> MessageKey {
         match self {
             Self::Overview => MessageKey::Overview,
+            Self::Activity => MessageKey::Activity,
             Self::Sessions => MessageKey::Sessions,
             Self::Sources => MessageKey::Sources,
             Self::Models => MessageKey::Models,
@@ -35,6 +38,7 @@ impl Route {
     pub const fn element_id(self) -> &'static str {
         match self {
             Self::Overview => "nav-overview",
+            Self::Activity => "nav-activity",
             Self::Sessions => "nav-sessions",
             Self::Sources => "nav-sources",
             Self::Models => "nav-models",
@@ -49,6 +53,7 @@ impl Route {
     pub fn from_name(name: &str) -> Option<Self> {
         match name.trim().to_ascii_lowercase().as_str() {
             "overview" => Some(Self::Overview),
+            "activity" => Some(Self::Activity),
             "sessions" => Some(Self::Sessions),
             "sources" => Some(Self::Sources),
             "models" => Some(Self::Models),
@@ -128,7 +133,7 @@ mod tests {
         let english = ShellState::new(Locale::En, ThemeMode::System, false);
         let chinese = ShellState::new(Locale::ZhCn, ThemeMode::System, false);
 
-        assert_eq!(Route::ALL.len(), 6);
+        assert_eq!(Route::ALL.len(), 7);
         for route in Route::ALL {
             assert!(!english.label(route).is_empty());
             assert!(!chinese.label(route).is_empty());
@@ -159,6 +164,7 @@ mod tests {
         assert_eq!(Route::from_name("sources"), Some(Route::Sources));
         assert_eq!(Route::from_name(" Settings "), Some(Route::Settings));
         assert_eq!(Route::from_name("OVERVIEW"), Some(Route::Overview));
+        assert_eq!(Route::from_name("activity"), Some(Route::Activity));
         assert_eq!(Route::from_name("sessions"), Some(Route::Sessions));
         assert_eq!(Route::from_name("models"), Some(Route::Models));
         assert_eq!(Route::from_name("pricing"), Some(Route::Pricing));

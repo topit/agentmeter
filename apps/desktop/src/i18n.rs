@@ -47,6 +47,7 @@ impl Locale {
             (Self::En, MessageKey::ApiEquivalentCost) => "API-equivalent estimate",
             (Self::En, MessageKey::NotAvailable) => "Not available",
             (Self::En, MessageKey::Overview) => "Overview",
+            (Self::En, MessageKey::Activity) => "Activity",
             (Self::En, MessageKey::Sessions) => "Sessions",
             (Self::En, MessageKey::Sources) => "Sources",
             (Self::En, MessageKey::Models) => "Models",
@@ -104,6 +105,24 @@ impl Locale {
             (Self::En, MessageKey::SettingsSaveError) => {
                 "AgentMeter could not save this preference."
             }
+            (Self::En, MessageKey::ActivityLoading) => "Loading activity…",
+            (Self::En, MessageKey::ActivityEmptyTitle) => "No activity recorded yet",
+            (Self::En, MessageKey::ActivityEmptyBody) => {
+                "Daily, weekly, and monthly usage will appear after a successful local scan."
+            }
+            (Self::En, MessageKey::ActivityErrorTitle) => "Activity unavailable",
+            (Self::En, MessageKey::ActivityGranularity) => "Period",
+            (Self::En, MessageKey::ActivityDaily) => "Daily",
+            (Self::En, MessageKey::ActivityWeekly) => "Weekly",
+            (Self::En, MessageKey::ActivityMonthly) => "Monthly",
+            (Self::En, MessageKey::ActivityMetric) => "Metric",
+            (Self::En, MessageKey::ActivityTokens) => "Tokens",
+            (Self::En, MessageKey::ActivityCost) => "API-equivalent estimate",
+            (Self::En, MessageKey::ActivityGroupBy) => "Group by",
+            (Self::En, MessageKey::ActivityClient) => "Client",
+            (Self::En, MessageKey::ActivityProvider) => "Provider",
+            (Self::En, MessageKey::ActivityModel) => "Model",
+            (Self::En, MessageKey::ActivityUnpriced) => "Includes unpriced events",
             (Self::ZhCn, MessageKey::AppSubtitle) => "本地 Agent 用量",
             (Self::ZhCn, MessageKey::ShellPlaceholder) => {
                 "本地数据快照可用后，用量视图将在这里显示。"
@@ -129,6 +148,7 @@ impl Locale {
             (Self::ZhCn, MessageKey::ApiEquivalentCost) => "API 等价估算",
             (Self::ZhCn, MessageKey::NotAvailable) => "暂无数据",
             (Self::ZhCn, MessageKey::Overview) => "概览",
+            (Self::ZhCn, MessageKey::Activity) => "活动",
             (Self::ZhCn, MessageKey::Sessions) => "会话",
             (Self::ZhCn, MessageKey::Sources) => "数据源",
             (Self::ZhCn, MessageKey::Models) => "模型",
@@ -182,6 +202,24 @@ impl Locale {
             (Self::ZhCn, MessageKey::SettingsThemeLight) => "浅色",
             (Self::ZhCn, MessageKey::SettingsThemeDark) => "深色",
             (Self::ZhCn, MessageKey::SettingsSaveError) => "AgentMeter 无法保存此偏好设置。",
+            (Self::ZhCn, MessageKey::ActivityLoading) => "正在加载活动数据…",
+            (Self::ZhCn, MessageKey::ActivityEmptyTitle) => "暂无活动记录",
+            (Self::ZhCn, MessageKey::ActivityEmptyBody) => {
+                "成功完成本地扫描后，这里将显示每日、每周和每月用量。"
+            }
+            (Self::ZhCn, MessageKey::ActivityErrorTitle) => "活动数据暂不可用",
+            (Self::ZhCn, MessageKey::ActivityGranularity) => "周期",
+            (Self::ZhCn, MessageKey::ActivityDaily) => "每日",
+            (Self::ZhCn, MessageKey::ActivityWeekly) => "每周",
+            (Self::ZhCn, MessageKey::ActivityMonthly) => "每月",
+            (Self::ZhCn, MessageKey::ActivityMetric) => "指标",
+            (Self::ZhCn, MessageKey::ActivityTokens) => "Token",
+            (Self::ZhCn, MessageKey::ActivityCost) => "API 等价估算",
+            (Self::ZhCn, MessageKey::ActivityGroupBy) => "分组",
+            (Self::ZhCn, MessageKey::ActivityClient) => "客户端",
+            (Self::ZhCn, MessageKey::ActivityProvider) => "服务商",
+            (Self::ZhCn, MessageKey::ActivityModel) => "模型",
+            (Self::ZhCn, MessageKey::ActivityUnpriced) => "包含未计价事件",
         }
     }
 
@@ -238,6 +276,7 @@ pub enum MessageKey {
     ApiEquivalentCost,
     NotAvailable,
     Overview,
+    Activity,
     Sessions,
     Sources,
     Models,
@@ -287,6 +326,22 @@ pub enum MessageKey {
     SettingsThemeLight,
     SettingsThemeDark,
     SettingsSaveError,
+    ActivityLoading,
+    ActivityEmptyTitle,
+    ActivityEmptyBody,
+    ActivityErrorTitle,
+    ActivityGranularity,
+    ActivityDaily,
+    ActivityWeekly,
+    ActivityMonthly,
+    ActivityMetric,
+    ActivityTokens,
+    ActivityCost,
+    ActivityGroupBy,
+    ActivityClient,
+    ActivityProvider,
+    ActivityModel,
+    ActivityUnpriced,
 }
 
 pub fn health_state_key(state: SourceHealthState) -> MessageKey {
@@ -412,6 +467,33 @@ mod tests {
             MessageKey::ProviderReportedCost,
             MessageKey::ApiEquivalentCost,
             MessageKey::NotAvailable,
+        ] {
+            assert!(!Locale::En.text(key).is_empty());
+            assert!(!Locale::ZhCn.text(key).is_empty());
+            assert_ne!(Locale::En.text(key), Locale::ZhCn.text(key));
+        }
+    }
+
+    #[test]
+    fn localizes_every_activity_state_control_and_metric() {
+        for key in [
+            MessageKey::Activity,
+            MessageKey::ActivityLoading,
+            MessageKey::ActivityEmptyTitle,
+            MessageKey::ActivityEmptyBody,
+            MessageKey::ActivityErrorTitle,
+            MessageKey::ActivityGranularity,
+            MessageKey::ActivityDaily,
+            MessageKey::ActivityWeekly,
+            MessageKey::ActivityMonthly,
+            MessageKey::ActivityMetric,
+            MessageKey::ActivityTokens,
+            MessageKey::ActivityCost,
+            MessageKey::ActivityGroupBy,
+            MessageKey::ActivityClient,
+            MessageKey::ActivityProvider,
+            MessageKey::ActivityModel,
+            MessageKey::ActivityUnpriced,
         ] {
             assert!(!Locale::En.text(key).is_empty());
             assert!(!Locale::ZhCn.text(key).is_empty());
