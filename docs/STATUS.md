@@ -51,7 +51,9 @@ Every commit must include the corresponding update to this file: task status, de
 | M3-05 Settings presentation | coordinator | `3898451` | preferences persistence contract | pushed | preference round-trip tests; persistence and stale-save tests; workspace checks | committed and pushed as `b28fea0` |
 | M3-06 CI native validation | coordinator | `b28fea0` | public-repository CI budget | pushed | green macOS runner runs; reviewed screenshot matrix artifacts | committed and pushed as `9952d9a` and `e597ab0`; evidence recorded in `9c2eb9d` whose CI run is green; M3 exited |
 | M4-01 Kimi/Kimi Code adapter | coordinator | `9c2eb9d` | upstream wire.jsonl format research | pushed | fixture and cross-check suite; storage pipeline; workspace checks | committed and pushed as `8cf9974`; CI run `32207108342` green on Linux and macOS |
-| M4-02 Codex Desktop adapter | coordinator | `8cf9974` | shared Codex home / container storage research | completed | fixture and cross-check suite; storage pipeline; workspace checks | Codex Desktop verified to share the CLI store; interactive sources accepted with originator-based client attribution; the next task reconciles this row with the actual commit and push |
+| M4-02 Codex Desktop adapter | coordinator | `8cf9974` | shared Codex home / container storage research | pushed | fixture and cross-check suite; storage pipeline; workspace checks | committed and pushed as `ef26398`; CI run `32208756268` green |
+| M4-03 DeepSeek Harness | coordinator | `ef26398` | local contract research | deferred to v1.1 | research verdict; fixtures or documented explicit integration | user confirmed the product is the `@deepseek-ai/dsh` npm CLI (`dsh`); deferred 2026-08-19 to finish v1 core scope first; in-flight research will be archived for v1.1 |
+| M4-04 Pricing snapshots and estimates | coordinator | `ef26398` | reviewed rate dataset | queued | exact-integer estimate tests; matching precedence tests; repricing storage tests | build `agentmeter-pricing` dataset types, matching precedence, and reversible estimates |
 
 ## Verification contract
 

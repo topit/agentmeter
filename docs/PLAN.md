@@ -190,14 +190,14 @@ Recommended SQLite defaults: WAL, foreign keys on, busy timeout, and `synchronou
 | Pi | done (M2) | session JSONL | assistant usage and embedded reported cost | missing provider and timestamp variants |
 | Kimi/Kimi Code | done (M4-01) | old/new `wire.jsonl` layouts | old status replacement and new turn-scope events | cumulative/session usage duplication |
 | Codex Desktop | done (M4-02) | probe shared Codex home, then containers | reuse parser only after fixture confirmation | separate/sandboxed storage may differ |
-| DeepSeek Harness | next (M4-03) | unknown until product/fixtures confirmed | dedicated adapter or explicit telemetry integration | no stable generic local contract |
+| DeepSeek Harness | v1.1 | `@deepseek-ai/dsh` npm package, command `dsh` (existence user-confirmed 2026-08-19; format unresearched) | dedicated adapter or explicit telemetry integration | no stable generic local contract |
 | Factory Droid | v1.1 | session settings snapshots | latest snapshot per session | no per-turn history |
 | Grok Build CLI | v1.1 | session `updates.jsonl` + summary | event IDs, model usage, recorded cost | reasoning/output semantics and missing summary |
 | Copilot CLI | v1.1 | session state and optional OTel | detect capability and guide setup | telemetry may not exist retrospectively |
 | Cursor | v1.1 | private DB or explicit export/API cache | research after stable MVP | schema and authentication churn |
 | Grok bot/remote agents | v1.1 | export/API/OTel | opt-in import | no local source on the desktop |
 
-Roadmap order decided 2026-08-19: Codex Desktop and DeepSeek Harness are implemented next (M4-02, M4-03). Factory Droid, Grok Build CLI, Copilot CLI, Cursor, and remote imports are deferred to v1.1, after the v1 scope is complete.
+Roadmap order decided 2026-08-19: Codex Desktop was implemented next (M4-02). DeepSeek Harness (the `@deepseek-ai/dsh` npm CLI, command `dsh`) was also deferred to v1.1 on 2026-08-19 — v1 finishes its core scope first (pricing, views, export), then v1.1 picks up the deferred adapters. Deferred to v1.1: Factory Droid, Grok Build CLI, Copilot CLI, DeepSeek Harness (dsh), Cursor, and remote imports.
 
 Amp's documented `--stream-json` output is implemented as a separate opt-in, append-only source. It is authoritative for token field names but does not expose event timestamps, model/provider identity, or a native per-event ID. Local `threads/*.json` parsing remains an explicitly experimental path because Amp does not publish that persistence schema; third-party parsers are cross-check evidence, not a compatibility guarantee.
 
@@ -441,12 +441,12 @@ Exit: met. Representative UI states were verified in all four locale/theme combi
 
 ### M4 — Coverage and pricing
 
-- Kimi/Kimi Code (done), Codex Desktop, DeepSeek Harness;
+- Kimi/Kimi Code (done), Codex Desktop (done);
 - versioned pricing snapshots and reversible estimates;
 - activity, sessions, models, and pricing views;
 - JSON/CSV export.
 
-Exit: six complete collectors, visible pricing provenance, and no silent unknown pricing.
+Exit: five complete collectors (DeepSeek Harness moved to v1.1), visible pricing provenance, and no silent unknown pricing.
 
 ### M5 — macOS beta
 
@@ -509,4 +509,4 @@ These decisions do not block M1 but should be settled before macOS beta:
 
 ## 19. Immediate next implementation step
 
-M4-02 (Codex Desktop) is complete — the desktop app shares the CLI store, so the adapter change was accepting interactive session sources with originator-based client attribution (parser version 4 rebuilds existing checkpoints). Start M4-03: DeepSeek Harness. Its local contract is unknown until product/fixtures confirm it; research first, and if no stable local source exists, deliver an explicit, documented telemetry/import integration instead of guessing. After M4-03, the remaining M4 scope is pricing snapshots and reversible estimates, the activity/sessions/models/pricing views, and JSON/CSV export.
+Adapter work is paused for v1: DeepSeek Harness (`dsh`) joined the v1.1 backlog on 2026-08-19 alongside Factory Droid, Grok Build CLI, Copilot CLI, and Cursor. The next bounded task is M4-03 (versioned pricing snapshots and reversible estimates): build the `agentmeter-pricing` crate's dataset types, exact nano-USD integer math, and reviewed matching precedence (provider-reported retained, exact provider/model match, reviewed alias match with visible confidence, otherwise explicitly unpriced), then wire repricing into storage without re-ingesting source logs. After pricing come the activity/sessions/models/pricing views and JSON/CSV export.
