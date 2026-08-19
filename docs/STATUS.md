@@ -57,7 +57,7 @@ Every commit must include the corresponding update to this file: task status, de
 | M4-05 Seed rate dataset | coordinator | `3bf7a68` | official pricing pages | pushed | per-rate official sources; integer conversion tests; workspace checks | committed and pushed as `35d1901`; CI run `32228441956` green |
 | M4-06 Activity view | coordinator | `35d1901` | canonical ledger and reversible estimates | pushed; layout follow-up completed | UTC aggregation tests; stale-result tests; macOS compile; workspace checks | committed as `eb72ad2`; narrow-window follow-up `2a60a1f` and CI run `32239856279` are green |
 | M4-07 Sessions view | coordinator | `2a60a1f` | canonical session ledger and cost facts | pushed | source-scoped aggregation tests; stale-result tests; macOS compile; workspace checks | committed and pushed as `45af315`; CI run `32242486063` green; next is Models/Pricing |
-| M4-08 Models/Pricing views | coordinator | `45af315` | model ledger, reviewed rates, and reversible estimates | completed; verification deferred by user | model aggregation; pricing provenance; stale-result tests; macOS compile; workspace checks | implementation complete; user requested direct commit without final verification; next is JSON/CSV export |
+| M4-08 Models/Pricing views | coordinator | `45af315` | model ledger, reviewed rates, and reversible estimates | pushed | model aggregation; pricing provenance; stale-result tests; macOS compile; workspace checks | committed and pushed as `d415dbb`; deferred verification completed 2026-08-19 — full workspace gates (142 tests), CI run `32243890892` green, and reviewed Models/Pricing visual matrices; next is JSON/CSV export |
 
 ## Verification contract
 
@@ -310,11 +310,18 @@ Every commit must include the corresponding update to this file: task status, de
 - Orb verification passed: `cargo fmt --all --check`, `cargo check --workspace --all-targets`, `cargo test --workspace` (139 tests: 129 unit tests and 10 collector-to-storage integration tests), `cargo clippy --workspace --all-targets -- -D warnings`, `git diff --check`, and the privacy-pattern scan (only policy examples and intentional `/fixture/home/...` paths matched).
 - Apple Silicon validation of the exact candidate passed workspace check, 43 application/desktop tests, and Clippy with warnings denied using only the known local `runtime_shaders` bypass. Hosted CI run `32242486063` then passed Linux and production-feature macOS jobs, including desktop build and the 20-image visual matrix upload. Inspection confirmed populated English-light and Chinese-dark Sessions content, but the macOS screen-capture permission dialog still obscures the center, so the artifact is not claimed as complete visual acceptance.
 
+## M4-08 verification evidence (deferred verification completed)
+
+- The deferred candidate `d415dbb` received the full required validation on 2026-08-19 after the user's direct-commit request: on the user's Mac with the temporary local-only `runtime_shaders` bypass, `cargo fmt --all --check`, `cargo check --workspace --all-targets`, `cargo test --workspace` (142 tests), `cargo clippy --workspace --all-targets -- -D warnings`, and `git diff --check` all passed; the bypass was reverted before this documentation commit.
+- Hosted CI run `32243890892` passed both the Linux gates and the production-feature macOS job (Metal Toolchain, all-target checks, desktop build, launch, and the extended visual matrix — now 28 images covering Activity, Sessions, Models, and Pricing with route-specific synthetic seed data).
+- Reviewed artifacts: the Models route in Chinese dark renders every model card with token buckets, separately labeled costs, confidence, and pricing provenance, and visibly marks unknown models as unpriced (`unpriced:no-match`); the Pricing route in English light renders the dataset header (`agentmeter-reviewed@2026-08-19.1` with priced/unpriced counts) and the rate catalog with aliases and correct official rates (for example the $56.25 claude-opus-5-5 cache write). No permission dialogs or rendering defects appeared in the inspected captures, unlike the M4-07 run.
+- Code review confirmed the established boundaries: `ModelsPricingService` owns the database work (including the idempotent bundled-dataset application when estimates are stale or incomplete), GPUI loads through the background executor with single-use request generations, and localization/theme rules are enforced by the portable tests included in the 142-test run.
+
 ## Development handoff
 
 M4-08 adds deterministic lifetime model aggregation, current pricing-snapshot provenance, bundled-dataset refresh, stale-result-safe portable presentation, localized Models/Pricing routes, and synthetic CI visual fixtures. Focused application/desktop tests passed during development, but the exact final candidate did not receive the required full workspace or macOS checks because the user explicitly requested immediate submission after their validation-tool quota was exhausted.
 
-Handoff point: the unverified M4-08 Models/Pricing implementation, based on `45af315` on GitHub `topit/agentmeter`, branch `main`. M4-07 is reconciled to `45af315` with CI run `32242486063` green. Before starting JSON/CSV export, reconcile the M4-08 commit/push and run the deferred full workspace plus macOS validation.
+Handoff point: the M4-08 verification-reconciliation commit on GitHub `topit/agentmeter`, branch `main`, based on `d415dbb`. M4-08 is reconciled with CI run `32243890892` green and reviewed visual matrices. The next bounded task is M4-09, the JSON/CSV export (privacy-reviewed payload, exact preview, explicit user action per `docs/PLAN.md` section 13).
 
 ### Product and implementation state
 
