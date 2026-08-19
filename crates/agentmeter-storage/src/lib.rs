@@ -176,6 +176,8 @@ pub enum StorageError {
     ActivityOverflow,
     #[error("usage or cost totals overflowed while building a session snapshot")]
     SessionOverflow,
+    #[error("usage or cost totals overflowed while building a models snapshot")]
+    ModelsOverflow,
     #[error("stored {field} preference has an unsupported value: {value}")]
     InvalidPreference { field: &'static str, value: String },
     #[error("failed to serialize diagnostics: {0}")]
@@ -947,6 +949,160 @@ impl Database {
             })
         })?;
         rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    /// Lifetime usage and cost totals by exact provider/model identity. Cost
+    /// facts are reduced to one row per event before grouping so an event with
+    /// both reported and estimated costs contributes its tokens exactly once.
+    pub fn model_usage_rows(&self) -> Result<Vec<ModelUsageRow>> {
+        let mut statement = self.connection.prepare(
+            "WITH event_facts AS (
+                SELECT event.*,
+                       (SELECT CAST(ROUND(cost.usd * 1000000000) AS INTEGER)
+                        FROM event_costs AS cost
+                        WHERE cost.source_object_id = event.source_object_id
+                          AND cost.event_id = event.event_id
+                          AND cost.kind = 'provider_reported') AS reported_nanos,
+                       (SELECT CAST(ROUND(cost.usd * 1000000000) AS INTEGER)
+                        FROM event_costs AS cost
+                        WHERE cost.source_object_id = event.source_object_id
+                          AND cost.event_id = event.event_id
+                          AND cost.kind = 'api_equivalent_estimate') AS estimated_nanos,
+                       EXISTS(
+                           SELECT 1 FROM event_costs AS cost
+                           WHERE cost.source_object_id = event.source_object_id
+                             AND cost.event_id = event.event_id
+                             AND cost.kind = 'unpriced'
+                       ) AS unpriced,
+                       (SELECT cost.pricing_key FROM event_costs AS cost
+                        WHERE cost.source_object_id = event.source_object_id
+                          AND cost.event_id = event.event_id
+                          AND cost.kind IN ('api_equivalent_estimate', 'unpriced')) AS pricing_key,
+                       (SELECT cost.pricing_rule FROM event_costs AS cost
+                        WHERE cost.source_object_id = event.source_object_id
+                          AND cost.event_id = event.event_id
+                          AND cost.kind IN ('api_equivalent_estimate', 'unpriced')) AS pricing_rule,
+                       (SELECT cost.confidence FROM event_costs AS cost
+                        WHERE cost.source_object_id = event.source_object_id
+                          AND cost.event_id = event.event_id
+                          AND cost.kind IN ('api_equivalent_estimate', 'unpriced')) AS pricing_confidence
+                FROM usage_events AS event
+             )
+             SELECT grouped.provider, grouped.model,
+                    (SELECT GROUP_CONCAT(value, char(31)) FROM (
+                        SELECT DISTINCT nested.client AS value
+                        FROM event_facts AS nested
+                        WHERE nested.provider = grouped.provider
+                          AND nested.model = grouped.model
+                        ORDER BY value
+                    )),
+                    SUM(grouped.input_tokens), SUM(grouped.output_tokens),
+                    SUM(grouped.cache_read_tokens), SUM(grouped.cache_write_tokens),
+                    SUM(grouped.reasoning_tokens), COUNT(*),
+                    CASE MAX(CASE grouped.confidence
+                        WHEN 'estimated' THEN 2 WHEN 'derived' THEN 1 ELSE 0 END)
+                        WHEN 2 THEN 'estimated' WHEN 1 THEN 'derived' ELSE 'exact' END,
+                    SUM(grouped.reported_nanos), SUM(grouped.estimated_nanos),
+                    SUM(grouped.unpriced),
+                    (SELECT GROUP_CONCAT(value, char(31)) FROM (
+                        SELECT DISTINCT nested.pricing_key AS value
+                        FROM event_facts AS nested
+                        WHERE nested.provider = grouped.provider
+                          AND nested.model = grouped.model
+                          AND nested.pricing_key IS NOT NULL
+                        ORDER BY value
+                    )),
+                    (SELECT GROUP_CONCAT(value, char(31)) FROM (
+                        SELECT DISTINCT nested.pricing_rule AS value
+                        FROM event_facts AS nested
+                        WHERE nested.provider = grouped.provider
+                          AND nested.model = grouped.model
+                          AND nested.pricing_rule IS NOT NULL
+                        ORDER BY value
+                    )),
+                    CASE MAX(CASE grouped.pricing_confidence
+                        WHEN 'estimated' THEN 2 WHEN 'derived' THEN 1 WHEN 'exact' THEN 0 END)
+                        WHEN 2 THEN 'estimated' WHEN 1 THEN 'derived'
+                        WHEN 0 THEN 'exact' ELSE NULL END
+             FROM event_facts AS grouped
+             GROUP BY grouped.provider, grouped.model
+             ORDER BY SUM(grouped.input_tokens + grouped.output_tokens
+                          + grouped.cache_read_tokens + grouped.cache_write_tokens
+                          + grouped.reasoning_tokens) DESC,
+                      grouped.provider, grouped.model",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(ModelUsageRow {
+                provider: nonempty(row.get(0)?),
+                model: row.get(1)?,
+                clients: split_grouped_values(row.get(2)?),
+                tokens: TokenBreakdown {
+                    input: row.get::<_, i64>(3)? as u64,
+                    output: row.get::<_, i64>(4)? as u64,
+                    cache_read: row.get::<_, i64>(5)? as u64,
+                    cache_write: row.get::<_, i64>(6)? as u64,
+                    reasoning: row.get::<_, i64>(7)? as u64,
+                },
+                event_count: row.get::<_, i64>(8)? as u64,
+                confidence: parse_confidence(&row.get::<_, String>(9)?),
+                provider_reported_usd: row
+                    .get::<_, Option<i64>>(10)?
+                    .map(|nanos| NanoUsd::from_nanos(nanos as u64)),
+                api_equivalent_estimate_usd: row
+                    .get::<_, Option<i64>>(11)?
+                    .map(|nanos| NanoUsd::from_nanos(nanos as u64)),
+                unpriced_event_count: row.get::<_, i64>(12)? as u64,
+                pricing_keys: split_grouped_values(row.get(13)?),
+                pricing_rules: split_grouped_values(row.get(14)?),
+                pricing_confidence: row
+                    .get::<_, Option<String>>(15)?
+                    .map(|confidence| parse_confidence(&confidence)),
+            })
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    /// Most recently recorded pricing dataset and the current estimate facts
+    /// that still reference it. A dataset can exist with zero events.
+    pub fn latest_pricing_status(&self) -> Result<Option<PricingStatusRow>> {
+        self.connection
+            .query_row(
+                "WITH selected_snapshot AS (
+                    SELECT CASE
+                        WHEN EXISTS(SELECT 1 FROM usage_events)
+                        THEN (SELECT MAX(cost.pricing_snapshot_id)
+                              FROM event_costs AS cost
+                              WHERE cost.kind IN ('api_equivalent_estimate', 'unpriced'))
+                        ELSE (SELECT snapshot.id FROM pricing_snapshots AS snapshot
+                              ORDER BY snapshot.fetched_at_unix_ms DESC, snapshot.id DESC
+                              LIMIT 1)
+                    END AS id
+                 )
+                 SELECT snapshot.source, snapshot.dataset_version,
+                        snapshot.content_hash, snapshot.fetched_at_unix_ms,
+                        (SELECT COUNT(*) FROM event_costs AS cost
+                         WHERE cost.pricing_snapshot_id = snapshot.id
+                           AND cost.kind = 'api_equivalent_estimate'),
+                        (SELECT COUNT(*) FROM event_costs AS cost
+                         WHERE cost.pricing_snapshot_id = snapshot.id
+                           AND cost.kind = 'unpriced')
+                 FROM pricing_snapshots AS snapshot
+                 WHERE snapshot.id = (SELECT id FROM selected_snapshot)",
+                [],
+                |row| {
+                    Ok(PricingStatusRow {
+                        source: row.get(0)?,
+                        dataset_version: row.get(1)?,
+                        content_hash: row.get(2)?,
+                        fetched_at_unix_ms: row.get(3)?,
+                        priced_event_count: row.get::<_, i64>(4)? as u64,
+                        unpriced_event_count: row.get::<_, i64>(5)? as u64,
+                    })
+                },
+            )
+            .optional()
             .map_err(Into::into)
     }
 
@@ -1733,6 +1889,32 @@ pub struct SessionSummaryRow {
     pub models: Vec<String>,
     pub provider_reported_usd: Option<NanoUsd>,
     pub api_equivalent_estimate_usd: Option<NanoUsd>,
+    pub unpriced_event_count: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ModelUsageRow {
+    pub provider: Option<String>,
+    pub model: String,
+    pub clients: Vec<String>,
+    pub tokens: TokenBreakdown,
+    pub event_count: u64,
+    pub confidence: DataConfidence,
+    pub provider_reported_usd: Option<NanoUsd>,
+    pub api_equivalent_estimate_usd: Option<NanoUsd>,
+    pub unpriced_event_count: u64,
+    pub pricing_keys: Vec<String>,
+    pub pricing_rules: Vec<String>,
+    pub pricing_confidence: Option<DataConfidence>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PricingStatusRow {
+    pub source: String,
+    pub dataset_version: String,
+    pub content_hash: String,
+    pub fetched_at_unix_ms: i64,
+    pub priced_event_count: u64,
     pub unpriced_event_count: u64,
 }
 

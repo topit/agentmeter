@@ -8,7 +8,7 @@ use std::{
 use agentmeter_core::{
     AppPreferences, NanoUsd, OverviewSnapshot, SourceHealthSnapshot, TokenBreakdown,
 };
-use agentmeter_pricing::RateDataset;
+use agentmeter_pricing::{ModelRates, RateDataset};
 use agentmeter_storage::{Database, EstimateFact, StorageError};
 
 /// Why a local data service could not produce a snapshot. The kinds are
@@ -353,6 +353,260 @@ fn sessions_generation(sessions: &[SessionSummary]) -> u64 {
     hash
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ModelUsageSummary {
+    pub provider: Option<String>,
+    pub model: String,
+    pub clients: Vec<String>,
+    pub tokens: TokenBreakdown,
+    pub total_tokens: u64,
+    pub event_count: u64,
+    pub confidence: agentmeter_core::DataConfidence,
+    pub provider_reported_usd: Option<NanoUsd>,
+    pub api_equivalent_estimate_usd: Option<NanoUsd>,
+    pub unpriced_event_count: u64,
+    pub pricing_keys: Vec<String>,
+    pub pricing_rules: Vec<String>,
+    pub pricing_confidence: Option<agentmeter_core::DataConfidence>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ModelRateSummary {
+    pub key: String,
+    pub aliases: Vec<String>,
+    pub input_per_million: NanoUsd,
+    pub output_per_million: NanoUsd,
+    pub cache_read_per_million: NanoUsd,
+    pub cache_write_per_million: NanoUsd,
+    pub reasoning_per_million: NanoUsd,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PricingApplicationSummary {
+    pub source: String,
+    pub version: String,
+    pub content_hash: String,
+    pub dataset_updated_at_unix_ms: i64,
+    pub priced_event_count: u64,
+    pub unpriced_event_count: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ModelsPricingSnapshot {
+    pub generation: u64,
+    pub dataset_source: String,
+    pub dataset_version: String,
+    pub rates: Vec<ModelRateSummary>,
+    pub models: Vec<ModelUsageSummary>,
+    pub applied: Option<PricingApplicationSummary>,
+}
+
+/// Immutable lifetime model totals plus the reviewed pricing catalog and its
+/// latest local application status.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ModelsPricingService {
+    database_path: PathBuf,
+}
+
+impl ModelsPricingService {
+    pub fn in_data_directory(data_directory: impl AsRef<Path>) -> Self {
+        Self {
+            database_path: local_database_path(data_directory.as_ref()),
+        }
+    }
+
+    pub fn load(
+        &self,
+        dataset: &RateDataset,
+    ) -> Result<ModelsPricingSnapshot, LocalDataServiceError> {
+        let database = open_local_database(&self.database_path)?;
+        let models = database
+            .model_usage_rows()
+            .map_err(LocalDataServiceError::Database)?
+            .into_iter()
+            .map(|row| {
+                Ok(ModelUsageSummary {
+                    provider: row.provider,
+                    model: row.model,
+                    clients: row.clients,
+                    total_tokens: row
+                        .tokens
+                        .checked_total()
+                        .ok_or(StorageError::ModelsOverflow)?,
+                    tokens: row.tokens,
+                    event_count: row.event_count,
+                    confidence: row.confidence,
+                    provider_reported_usd: row.provider_reported_usd,
+                    api_equivalent_estimate_usd: row.api_equivalent_estimate_usd,
+                    unpriced_event_count: row.unpriced_event_count,
+                    pricing_keys: row.pricing_keys,
+                    pricing_rules: row.pricing_rules,
+                    pricing_confidence: row.pricing_confidence,
+                })
+            })
+            .collect::<Result<Vec<_>, StorageError>>()
+            .map_err(LocalDataServiceError::Database)?;
+        let applied = database
+            .latest_pricing_status()
+            .map_err(LocalDataServiceError::Database)?
+            .map(|row| PricingApplicationSummary {
+                source: row.source,
+                version: row.dataset_version,
+                content_hash: row.content_hash,
+                dataset_updated_at_unix_ms: row.fetched_at_unix_ms,
+                priced_event_count: row.priced_event_count,
+                unpriced_event_count: row.unpriced_event_count,
+            });
+        let rates = dataset
+            .rates
+            .iter()
+            .map(|(key, rates)| model_rate_summary(dataset, key, *rates))
+            .collect::<Result<Vec<_>, StorageError>>()
+            .map_err(LocalDataServiceError::Database)?;
+        let mut snapshot = ModelsPricingSnapshot {
+            generation: 0,
+            dataset_source: dataset.source.clone(),
+            dataset_version: dataset.version.clone(),
+            rates,
+            models,
+            applied,
+        };
+        snapshot.generation = models_pricing_generation(&snapshot);
+        Ok(snapshot)
+    }
+
+    pub fn load_bundled(&self) -> Result<ModelsPricingSnapshot, LocalDataServiceError> {
+        self.load(&RateDataset::bundled())
+    }
+
+    /// Applies the bundled dataset when it is stale or new events have no
+    /// estimate fact, then returns the resulting immutable read snapshot.
+    pub fn load_or_apply_bundled(
+        &self,
+        observed_at_unix_ms: i64,
+    ) -> Result<ModelsPricingSnapshot, LocalDataServiceError> {
+        let dataset = RateDataset::bundled();
+        let snapshot = self.load(&dataset)?;
+        let event_count = snapshot
+            .models
+            .iter()
+            .try_fold(0_u64, |total, model| total.checked_add(model.event_count));
+        let is_current = event_count.is_some_and(|event_count| {
+            snapshot.applied.as_ref().is_some_and(|applied| {
+                applied.source == dataset.source
+                    && applied.version == dataset.version
+                    && applied.content_hash == dataset.content_hash()
+                    && applied
+                        .priced_event_count
+                        .checked_add(applied.unpriced_event_count)
+                        == Some(event_count)
+            })
+        });
+        if is_current {
+            return Ok(snapshot);
+        }
+        PricingService {
+            database_path: self.database_path.clone(),
+        }
+        .reprice(&dataset, observed_at_unix_ms)?;
+        self.load(&dataset)
+    }
+}
+
+fn model_rate_summary(
+    dataset: &RateDataset,
+    key: &str,
+    rates: ModelRates,
+) -> Result<ModelRateSummary, StorageError> {
+    let per_million = |rate: u64| {
+        rate.checked_mul(1_000_000)
+            .map(NanoUsd::from_nanos)
+            .ok_or(StorageError::ModelsOverflow)
+    };
+    Ok(ModelRateSummary {
+        key: key.to_owned(),
+        aliases: dataset
+            .aliases
+            .iter()
+            .filter(|(_, canonical)| canonical.as_str() == key)
+            .map(|(alias, _)| alias.clone())
+            .collect(),
+        input_per_million: per_million(rates.input)?,
+        output_per_million: per_million(rates.output)?,
+        cache_read_per_million: per_million(rates.cache_read)?,
+        cache_write_per_million: per_million(rates.cache_write)?,
+        reasoning_per_million: per_million(rates.reasoning)?,
+    })
+}
+
+fn models_pricing_generation(snapshot: &ModelsPricingSnapshot) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for value in [&snapshot.dataset_source, &snapshot.dataset_version] {
+        hash_activity_bytes(&mut hash, value.as_bytes());
+    }
+    for rate in &snapshot.rates {
+        hash_activity_bytes(&mut hash, rate.key.as_bytes());
+        for alias in &rate.aliases {
+            hash_activity_bytes(&mut hash, alias.as_bytes());
+        }
+        for value in [
+            rate.input_per_million,
+            rate.output_per_million,
+            rate.cache_read_per_million,
+            rate.cache_write_per_million,
+            rate.reasoning_per_million,
+        ] {
+            hash_activity_bytes(&mut hash, &value.as_nanos().to_le_bytes());
+        }
+    }
+    for model in &snapshot.models {
+        hash_activity_bytes(&mut hash, model.model.as_bytes());
+        if let Some(provider) = &model.provider {
+            hash_activity_bytes(&mut hash, provider.as_bytes());
+        }
+        for value in model
+            .clients
+            .iter()
+            .chain(&model.pricing_keys)
+            .chain(&model.pricing_rules)
+        {
+            hash_activity_bytes(&mut hash, value.as_bytes());
+        }
+        for value in [
+            model.tokens.input,
+            model.tokens.output,
+            model.tokens.cache_read,
+            model.tokens.cache_write,
+            model.tokens.reasoning,
+            model.event_count,
+            model.unpriced_event_count,
+            model.provider_reported_usd.map_or(0, NanoUsd::as_nanos),
+            model
+                .api_equivalent_estimate_usd
+                .map_or(0, NanoUsd::as_nanos),
+            model.confidence as u64,
+            model
+                .pricing_confidence
+                .map_or(u64::MAX, |value| value as u64),
+        ] {
+            hash_activity_bytes(&mut hash, &value.to_le_bytes());
+        }
+    }
+    if let Some(applied) = &snapshot.applied {
+        for value in [&applied.source, &applied.version, &applied.content_hash] {
+            hash_activity_bytes(&mut hash, value.as_bytes());
+        }
+        for value in [
+            applied.dataset_updated_at_unix_ms as u64,
+            applied.priced_event_count,
+            applied.unpriced_event_count,
+        ] {
+            hash_activity_bytes(&mut hash, &value.to_le_bytes());
+        }
+    }
+    hash
+}
+
 /// Immutable per-source collection health for the Sources screen.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SourcesService {
@@ -503,7 +757,8 @@ mod tests {
 
     use super::{
         ActivityDimension, ActivityGranularity, ActivityService, LocalDataErrorKind,
-        OverviewService, PreferencesService, PricingService, SessionsService, SourcesService,
+        ModelsPricingService, OverviewService, PreferencesService, PricingService, SessionsService,
+        SourcesService,
     };
     use agentmeter_pricing::RateDataset;
 
@@ -911,6 +1166,75 @@ mod tests {
             snapshot.costs.api_equivalent_estimate_usd,
             Some(NanoUsd::from_nanos(15_000)),
             "10×1_000 + 10×500 nano-USD after the second run"
+        );
+        Database::open(&database_path)
+            .unwrap()
+            .record_pricing_snapshot(
+                "unapplied-synthetic",
+                "future",
+                1_704_067_500_000,
+                "unapplied-content",
+            )
+            .unwrap();
+
+        let models_pricing = ModelsPricingService::in_data_directory(directory.path())
+            .load(&dataset)
+            .unwrap();
+        assert_eq!(models_pricing.models.len(), 2);
+        let priced = models_pricing
+            .models
+            .iter()
+            .find(|model| model.model == "model-priced")
+            .unwrap();
+        assert_eq!(priced.total_tokens, 10);
+        assert_eq!(priced.event_count, 1);
+        assert_eq!(
+            priced.provider_reported_usd,
+            Some(NanoUsd::from_nanos(1_000_000_000))
+        );
+        assert_eq!(
+            priced.api_equivalent_estimate_usd,
+            Some(NanoUsd::from_nanos(10_000))
+        );
+        assert_eq!(priced.pricing_keys, ["model-priced"]);
+        assert_eq!(priced.pricing_rules, ["exact"]);
+        assert_eq!(priced.pricing_confidence, Some(DataConfidence::Estimated));
+        let applied = models_pricing.applied.as_ref().unwrap();
+        assert_eq!(applied.source, dataset.source);
+        assert_eq!(applied.version, dataset.version);
+        assert_eq!(applied.dataset_updated_at_unix_ms, 1_704_067_400_000);
+        assert_eq!(applied.priced_event_count, 2);
+        assert_eq!(applied.unpriced_event_count, 0);
+        let kimi = models_pricing
+            .rates
+            .iter()
+            .find(|rate| rate.key == "kimi-k2.7-code")
+            .unwrap();
+        assert_eq!(kimi.aliases, ["kimi-for-coding"]);
+        assert_eq!(kimi.input_per_million, NanoUsd::from_nanos(950_000_000));
+        assert_eq!(
+            models_pricing,
+            ModelsPricingService::in_data_directory(directory.path())
+                .load(&dataset)
+                .unwrap()
+        );
+
+        let bundled_service = ModelsPricingService::in_data_directory(directory.path());
+        let bundled = bundled_service
+            .load_or_apply_bundled(1_704_067_600_000)
+            .unwrap();
+        assert_eq!(
+            bundled.applied.as_ref().unwrap().content_hash,
+            RateDataset::bundled().content_hash()
+        );
+        assert_eq!(bundled.applied.as_ref().unwrap().priced_event_count, 0);
+        assert_eq!(bundled.applied.as_ref().unwrap().unpriced_event_count, 2);
+        assert_eq!(
+            bundled,
+            bundled_service
+                .load_or_apply_bundled(1_704_067_700_000)
+                .unwrap(),
+            "an unchanged complete bundled run is not rewritten"
         );
     }
 

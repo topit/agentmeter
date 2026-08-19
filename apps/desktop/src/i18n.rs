@@ -144,6 +144,39 @@ impl Locale {
             (Self::En, MessageKey::ConfidenceExact) => "Exact",
             (Self::En, MessageKey::ConfidenceDerived) => "Derived",
             (Self::En, MessageKey::ConfidenceEstimated) => "Estimated",
+            (Self::En, MessageKey::ModelsLoading) => "Loading model usage…",
+            (Self::En, MessageKey::ModelsEmptyTitle) => "No model usage recorded yet",
+            (Self::En, MessageKey::ModelsEmptyBody) => {
+                "Exact model usage will appear after a successful local scan."
+            }
+            (Self::En, MessageKey::ModelsErrorTitle) => "Model usage unavailable",
+            (Self::En, MessageKey::ModelsProvider) => "Provider",
+            (Self::En, MessageKey::ModelsClients) => "Clients",
+            (Self::En, MessageKey::ModelsInputTokens) => "Input tokens",
+            (Self::En, MessageKey::ModelsOutputTokens) => "Output tokens",
+            (Self::En, MessageKey::ModelsCacheReadTokens) => "Cache-read tokens",
+            (Self::En, MessageKey::ModelsCacheWriteTokens) => "Cache-write tokens",
+            (Self::En, MessageKey::ModelsReasoningTokens) => "Reasoning tokens",
+            (Self::En, MessageKey::ModelsCacheEfficiency) => "Cache-read share",
+            (Self::En, MessageKey::ModelsPricingKey) => "Pricing key",
+            (Self::En, MessageKey::ModelsPricingRule) => "Pricing rule",
+            (Self::En, MessageKey::ModelsPricingConfidence) => "Pricing confidence",
+            (Self::En, MessageKey::PricingLoading) => "Loading pricing data…",
+            (Self::En, MessageKey::PricingErrorTitle) => "Pricing data unavailable",
+            (Self::En, MessageKey::PricingDatasetSource) => "Dataset source",
+            (Self::En, MessageKey::PricingDatasetVersion) => "Dataset version",
+            (Self::En, MessageKey::PricingAppliedDataset) => "Applied dataset",
+            (Self::En, MessageKey::PricingDatasetUpdated) => "Dataset updated",
+            (Self::En, MessageKey::PricingNotApplied) => "Not applied locally yet",
+            (Self::En, MessageKey::PricingPricedEvents) => "Priced events",
+            (Self::En, MessageKey::PricingUnpricedEvents) => "Unpriced events",
+            (Self::En, MessageKey::PricingRatesPerMillion) => "Rates per 1M tokens",
+            (Self::En, MessageKey::PricingAliases) => "Reviewed aliases",
+            (Self::En, MessageKey::PricingInputRate) => "Input",
+            (Self::En, MessageKey::PricingOutputRate) => "Output",
+            (Self::En, MessageKey::PricingCacheReadRate) => "Cache read",
+            (Self::En, MessageKey::PricingCacheWriteRate) => "Cache write",
+            (Self::En, MessageKey::PricingReasoningRate) => "Reasoning",
             (Self::ZhCn, MessageKey::AppSubtitle) => "本地 Agent 用量",
             (Self::ZhCn, MessageKey::ShellPlaceholder) => {
                 "本地数据快照可用后，用量视图将在这里显示。"
@@ -262,6 +295,39 @@ impl Locale {
             (Self::ZhCn, MessageKey::ConfidenceExact) => "精确",
             (Self::ZhCn, MessageKey::ConfidenceDerived) => "推导",
             (Self::ZhCn, MessageKey::ConfidenceEstimated) => "估算",
+            (Self::ZhCn, MessageKey::ModelsLoading) => "正在加载模型用量…",
+            (Self::ZhCn, MessageKey::ModelsEmptyTitle) => "暂无模型用量记录",
+            (Self::ZhCn, MessageKey::ModelsEmptyBody) => {
+                "成功完成本地扫描后，精确模型用量将在这里显示。"
+            }
+            (Self::ZhCn, MessageKey::ModelsErrorTitle) => "模型用量暂不可用",
+            (Self::ZhCn, MessageKey::ModelsProvider) => "服务商",
+            (Self::ZhCn, MessageKey::ModelsClients) => "客户端",
+            (Self::ZhCn, MessageKey::ModelsInputTokens) => "输入 Token",
+            (Self::ZhCn, MessageKey::ModelsOutputTokens) => "输出 Token",
+            (Self::ZhCn, MessageKey::ModelsCacheReadTokens) => "缓存读取 Token",
+            (Self::ZhCn, MessageKey::ModelsCacheWriteTokens) => "缓存写入 Token",
+            (Self::ZhCn, MessageKey::ModelsReasoningTokens) => "推理 Token",
+            (Self::ZhCn, MessageKey::ModelsCacheEfficiency) => "缓存读取占比",
+            (Self::ZhCn, MessageKey::ModelsPricingKey) => "计价键",
+            (Self::ZhCn, MessageKey::ModelsPricingRule) => "计价规则",
+            (Self::ZhCn, MessageKey::ModelsPricingConfidence) => "计价置信度",
+            (Self::ZhCn, MessageKey::PricingLoading) => "正在加载计价数据…",
+            (Self::ZhCn, MessageKey::PricingErrorTitle) => "计价数据暂不可用",
+            (Self::ZhCn, MessageKey::PricingDatasetSource) => "数据集来源",
+            (Self::ZhCn, MessageKey::PricingDatasetVersion) => "数据集版本",
+            (Self::ZhCn, MessageKey::PricingAppliedDataset) => "已应用数据集",
+            (Self::ZhCn, MessageKey::PricingDatasetUpdated) => "数据集更新时间",
+            (Self::ZhCn, MessageKey::PricingNotApplied) => "尚未在本地应用",
+            (Self::ZhCn, MessageKey::PricingPricedEvents) => "已计价事件",
+            (Self::ZhCn, MessageKey::PricingUnpricedEvents) => "未计价事件",
+            (Self::ZhCn, MessageKey::PricingRatesPerMillion) => "每百万 Token 费率",
+            (Self::ZhCn, MessageKey::PricingAliases) => "已审核别名",
+            (Self::ZhCn, MessageKey::PricingInputRate) => "输入",
+            (Self::ZhCn, MessageKey::PricingOutputRate) => "输出",
+            (Self::ZhCn, MessageKey::PricingCacheReadRate) => "缓存读取",
+            (Self::ZhCn, MessageKey::PricingCacheWriteRate) => "缓存写入",
+            (Self::ZhCn, MessageKey::PricingReasoningRate) => "推理",
         }
     }
 
@@ -304,6 +370,14 @@ impl Locale {
             (Self::ZhCn, 0) => format!("{minutes}分 {seconds}秒"),
             (Self::ZhCn, _) => format!("{hours}小时 {minutes}分"),
         }
+    }
+
+    pub fn format_ratio(self, numerator: u64, denominator: u64) -> String {
+        if denominator == 0 {
+            return self.text(MessageKey::NotAvailable).to_owned();
+        }
+        let basis_points = u128::from(numerator) * 10_000 / u128::from(denominator);
+        format!("{}.{:02}%", basis_points / 100, basis_points % 100)
     }
 
     /// Formats a Unix millisecond instant as an explicitly UTC timestamp so
@@ -416,6 +490,37 @@ pub enum MessageKey {
     ConfidenceExact,
     ConfidenceDerived,
     ConfidenceEstimated,
+    ModelsLoading,
+    ModelsEmptyTitle,
+    ModelsEmptyBody,
+    ModelsErrorTitle,
+    ModelsProvider,
+    ModelsClients,
+    ModelsInputTokens,
+    ModelsOutputTokens,
+    ModelsCacheReadTokens,
+    ModelsCacheWriteTokens,
+    ModelsReasoningTokens,
+    ModelsCacheEfficiency,
+    ModelsPricingKey,
+    ModelsPricingRule,
+    ModelsPricingConfidence,
+    PricingLoading,
+    PricingErrorTitle,
+    PricingDatasetSource,
+    PricingDatasetVersion,
+    PricingAppliedDataset,
+    PricingDatasetUpdated,
+    PricingNotApplied,
+    PricingPricedEvents,
+    PricingUnpricedEvents,
+    PricingRatesPerMillion,
+    PricingAliases,
+    PricingInputRate,
+    PricingOutputRate,
+    PricingCacheReadRate,
+    PricingCacheWriteRate,
+    PricingReasoningRate,
 }
 
 pub const fn confidence_key(confidence: DataConfidence) -> MessageKey {
@@ -532,6 +637,11 @@ mod tests {
             Locale::ZhCn.format_usd(NanoUsd::from_nanos(1_000_000)),
             "US$0.001"
         );
+        assert_eq!(Locale::En.format_ratio(1, 4), "25.00%");
+        assert_eq!(
+            Locale::ZhCn.format_ratio(0, 0),
+            Locale::ZhCn.text(MessageKey::NotAvailable)
+        );
     }
 
     #[test]
@@ -605,6 +715,47 @@ mod tests {
             MessageKey::ConfidenceExact,
             MessageKey::ConfidenceDerived,
             MessageKey::ConfidenceEstimated,
+        ] {
+            assert!(!Locale::En.text(key).is_empty());
+            assert!(!Locale::ZhCn.text(key).is_empty());
+            assert_ne!(Locale::En.text(key), Locale::ZhCn.text(key));
+        }
+    }
+
+    #[test]
+    fn localizes_every_models_and_pricing_label() {
+        for key in [
+            MessageKey::ModelsLoading,
+            MessageKey::ModelsEmptyTitle,
+            MessageKey::ModelsEmptyBody,
+            MessageKey::ModelsErrorTitle,
+            MessageKey::ModelsProvider,
+            MessageKey::ModelsClients,
+            MessageKey::ModelsInputTokens,
+            MessageKey::ModelsOutputTokens,
+            MessageKey::ModelsCacheReadTokens,
+            MessageKey::ModelsCacheWriteTokens,
+            MessageKey::ModelsReasoningTokens,
+            MessageKey::ModelsCacheEfficiency,
+            MessageKey::ModelsPricingKey,
+            MessageKey::ModelsPricingRule,
+            MessageKey::ModelsPricingConfidence,
+            MessageKey::PricingLoading,
+            MessageKey::PricingErrorTitle,
+            MessageKey::PricingDatasetSource,
+            MessageKey::PricingDatasetVersion,
+            MessageKey::PricingAppliedDataset,
+            MessageKey::PricingDatasetUpdated,
+            MessageKey::PricingNotApplied,
+            MessageKey::PricingPricedEvents,
+            MessageKey::PricingUnpricedEvents,
+            MessageKey::PricingRatesPerMillion,
+            MessageKey::PricingAliases,
+            MessageKey::PricingInputRate,
+            MessageKey::PricingOutputRate,
+            MessageKey::PricingCacheReadRate,
+            MessageKey::PricingCacheWriteRate,
+            MessageKey::PricingReasoningRate,
         ] {
             assert!(!Locale::En.text(key).is_empty());
             assert!(!Locale::ZhCn.text(key).is_empty());

@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::PathBuf,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use agentmeter_core::{
@@ -8,8 +9,9 @@ use agentmeter_core::{
 };
 use agentmeter_desktop::{
     ActivityDimension, ActivityGranularity, ActivityLoadState, ActivityMetric, ActivityService,
-    ActivityState, LocalDataErrorKind, Locale, MessageKey, OverviewLoadState, OverviewService,
-    OverviewState, PreferencesService, Route, SessionCard, SessionsLoadState, SessionsService,
+    ActivityState, LocalDataErrorKind, Locale, MessageKey, ModelCard, ModelsPricingLoadState,
+    ModelsPricingService, ModelsPricingState, OverviewLoadState, OverviewService, OverviewState,
+    PreferencesService, RateCard, Route, SessionCard, SessionsLoadState, SessionsService,
     SessionsState, SettingsLoadState, SettingsState, ShellState, SourceCard, SourcesLoadState,
     SourcesService, SourcesState, ThemeMode, ThemePalette, appearance_option_key,
     language_option_key, resolved_locale, resolved_theme_mode,
@@ -46,6 +48,8 @@ struct NavigationShell {
     _activity_task: Task<()>,
     sessions: SessionsState,
     _sessions_task: Task<()>,
+    models_pricing: ModelsPricingState,
+    _models_pricing_task: Task<()>,
     sources: SourcesState,
     _sources_task: Task<()>,
     settings: SettingsState,
@@ -147,6 +151,35 @@ impl NavigationShell {
             .ok();
         });
 
+        let mut models_pricing = ModelsPricingState::default();
+        let request = models_pricing.begin_request();
+        let load = cx.background_executor().spawn(async move {
+            let data_directory = macos_data_directory()?;
+            ModelsPricingService::in_data_directory(data_directory)
+                .load_or_apply_bundled(current_unix_ms())
+                .map_err(|error| error.kind())
+        });
+        let models_pricing_task = cx.spawn(async move |this, cx| {
+            let result = load.await;
+            this.update(cx, |this, cx| {
+                match result {
+                    Ok(snapshot) => {
+                        if this.models_pricing.apply_snapshot(request, snapshot) {
+                            let granularity = this.activity.granularity();
+                            let dimension = this.activity.dimension();
+                            this.reload_overview(cx);
+                            this.reload_activity(granularity, dimension, cx);
+                        }
+                    }
+                    Err(error) => {
+                        this.models_pricing.apply_error(request, error);
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        });
+
         let mut sources = SourcesState::default();
         let request = sources.begin_request();
         let load = cx.background_executor().spawn(async move {
@@ -205,6 +238,8 @@ impl NavigationShell {
             _activity_task: activity_task,
             sessions,
             _sessions_task: sessions_task,
+            models_pricing,
+            _models_pricing_task: models_pricing_task,
             sources,
             _sources_task: sources_task,
             settings,
@@ -245,6 +280,32 @@ impl NavigationShell {
                     }
                     Err(error) => {
                         this.activity.apply_error(request, error);
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn reload_overview(&mut self, cx: &mut Context<Self>) {
+        let request = self.overview.begin_request();
+        let load = cx.background_executor().spawn(async move {
+            let data_directory = macos_data_directory()?;
+            OverviewService::in_data_directory(data_directory)
+                .load()
+                .map_err(|error| error.kind())
+        });
+        cx.spawn(async move |this, cx| {
+            let result = load.await;
+            this.update(cx, |this, cx| {
+                match result {
+                    Ok(snapshot) => {
+                        this.overview.apply_snapshot(request, snapshot);
+                    }
+                    Err(error) => {
+                        this.overview.apply_error(request, error);
                     }
                 }
                 cx.notify();
@@ -832,6 +893,173 @@ impl NavigationShell {
         }
     }
 
+    fn models_content(&self, palette: ThemePalette) -> AnyElement {
+        let locale = self.state.locale();
+        match self.models_pricing.load_state() {
+            ModelsPricingLoadState::Loading => div()
+                .mt_3()
+                .text_color(rgb(palette.muted_text))
+                .child(locale.text(MessageKey::ModelsLoading))
+                .into_any_element(),
+            ModelsPricingLoadState::Error(error) => models_pricing_error(
+                locale.text(MessageKey::ModelsErrorTitle),
+                error,
+                locale,
+                palette,
+            ),
+            ModelsPricingLoadState::Populated => {
+                let snapshot = self
+                    .models_pricing
+                    .snapshot()
+                    .expect("populated models/pricing state must contain a snapshot");
+                if snapshot.models.is_empty() {
+                    return div()
+                        .mt_6()
+                        .max_w(px(560.0))
+                        .p_6()
+                        .rounded_lg()
+                        .border_1()
+                        .border_color(rgb(palette.border))
+                        .bg(rgb(palette.surface))
+                        .child(
+                            div()
+                                .text_lg()
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .child(locale.text(MessageKey::ModelsEmptyTitle)),
+                        )
+                        .child(
+                            div()
+                                .mt_2()
+                                .text_color(rgb(palette.muted_text))
+                                .child(locale.text(MessageKey::ModelsEmptyBody)),
+                        )
+                        .into_any_element();
+                }
+                div()
+                    .id("models-list")
+                    .mt_5()
+                    .max_h(px(600.0))
+                    .overflow_y_scroll()
+                    .flex()
+                    .flex_col()
+                    .gap_4()
+                    .children(snapshot.models.iter().map(|model| {
+                        model_card(ModelCard::from_summary(model, locale), locale, palette)
+                    }))
+                    .into_any_element()
+            }
+        }
+    }
+
+    fn pricing_content(&self, palette: ThemePalette) -> AnyElement {
+        let locale = self.state.locale();
+        match self.models_pricing.load_state() {
+            ModelsPricingLoadState::Loading => div()
+                .mt_3()
+                .text_color(rgb(palette.muted_text))
+                .child(locale.text(MessageKey::PricingLoading))
+                .into_any_element(),
+            ModelsPricingLoadState::Error(error) => models_pricing_error(
+                locale.text(MessageKey::PricingErrorTitle),
+                error,
+                locale,
+                palette,
+            ),
+            ModelsPricingLoadState::Populated => {
+                let snapshot = self
+                    .models_pricing
+                    .snapshot()
+                    .expect("populated models/pricing state must contain a snapshot");
+                let unavailable = locale.text(MessageKey::NotAvailable).to_owned();
+                let (applied_dataset, dataset_updated, priced_events, unpriced_events) = snapshot
+                    .applied
+                    .as_ref()
+                    .map(|applied| {
+                        (
+                            format!("{}@{}", applied.source, applied.version),
+                            locale.format_unix_ms_utc(applied.dataset_updated_at_unix_ms),
+                            locale.format_count(applied.priced_event_count),
+                            locale.format_count(applied.unpriced_event_count),
+                        )
+                    })
+                    .unwrap_or_else(|| {
+                        (
+                            locale.text(MessageKey::PricingNotApplied).to_owned(),
+                            unavailable.clone(),
+                            unavailable.clone(),
+                            unavailable,
+                        )
+                    });
+                div()
+                    .mt_5()
+                    .flex()
+                    .flex_col()
+                    .gap_4()
+                    .child(
+                        div()
+                            .max_w(px(760.0))
+                            .p_4()
+                            .rounded_lg()
+                            .border_1()
+                            .border_color(rgb(palette.border))
+                            .bg(rgb(palette.surface))
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(detail_row(
+                                locale.text(MessageKey::PricingDatasetSource),
+                                snapshot.dataset_source.clone(),
+                                palette,
+                            ))
+                            .child(detail_row(
+                                locale.text(MessageKey::PricingDatasetVersion),
+                                snapshot.dataset_version.clone(),
+                                palette,
+                            ))
+                            .child(detail_row(
+                                locale.text(MessageKey::PricingAppliedDataset),
+                                applied_dataset,
+                                palette,
+                            ))
+                            .child(detail_row(
+                                locale.text(MessageKey::PricingDatasetUpdated),
+                                dataset_updated,
+                                palette,
+                            ))
+                            .child(detail_row(
+                                locale.text(MessageKey::PricingPricedEvents),
+                                priced_events,
+                                palette,
+                            ))
+                            .child(detail_row(
+                                locale.text(MessageKey::PricingUnpricedEvents),
+                                unpriced_events,
+                                palette,
+                            )),
+                    )
+                    .child(
+                        div()
+                            .text_lg()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child(locale.text(MessageKey::PricingRatesPerMillion)),
+                    )
+                    .child(
+                        div()
+                            .id("pricing-rates-list")
+                            .max_h(px(390.0))
+                            .overflow_y_scroll()
+                            .flex()
+                            .flex_col()
+                            .gap_4()
+                            .children(snapshot.rates.iter().map(|rate| {
+                                rate_card(RateCard::from_summary(rate, locale), locale, palette)
+                            })),
+                    )
+                    .into_any_element()
+            }
+        }
+    }
+
     fn sources_content(&self, palette: ThemePalette) -> AnyElement {
         let locale = self.state.locale();
         match self.sources.load_state() {
@@ -1212,6 +1440,10 @@ impl Render for NavigationShell {
                     self.activity_content(palette, cx)
                 } else if selected == Route::Sessions {
                     self.sessions_content(palette)
+                } else if selected == Route::Models {
+                    self.models_content(palette)
+                } else if selected == Route::Pricing {
+                    self.pricing_content(palette)
                 } else if selected == Route::Sources {
                     self.sources_content(palette)
                 } else if selected == Route::Settings {
@@ -1347,6 +1579,101 @@ fn session_card(card: SessionCard, locale: Locale, palette: ThemePalette) -> imp
                 .text_color(rgb(palette.warning))
                 .child(locale.text(MessageKey::ActivityUnpriced))
         }))
+}
+
+fn models_pricing_error(
+    title: &'static str,
+    error: LocalDataErrorKind,
+    locale: Locale,
+    palette: ThemePalette,
+) -> AnyElement {
+    let message = match error {
+        LocalDataErrorKind::DataDirectory => MessageKey::OverviewDataDirectoryError,
+        LocalDataErrorKind::Database => MessageKey::OverviewDatabaseError,
+    };
+    div()
+        .mt_6()
+        .max_w(px(560.0))
+        .p_6()
+        .rounded_lg()
+        .border_1()
+        .border_color(rgb(palette.border))
+        .bg(rgb(palette.surface))
+        .child(
+            div()
+                .text_lg()
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .child(title),
+        )
+        .child(
+            div()
+                .mt_2()
+                .text_color(rgb(palette.muted_text))
+                .child(locale.text(message)),
+        )
+        .into_any_element()
+}
+
+fn model_card(card: ModelCard, locale: Locale, palette: ThemePalette) -> impl IntoElement {
+    div()
+        .max_w(px(760.0))
+        .p_4()
+        .rounded_lg()
+        .border_1()
+        .border_color(rgb(palette.border))
+        .bg(rgb(palette.surface))
+        .flex()
+        .flex_col()
+        .gap_2()
+        .child(
+            div()
+                .text_lg()
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .child(card.model),
+        )
+        .child(
+            div().mt_2().flex().flex_col().gap_1().children(
+                card.detail
+                    .into_iter()
+                    .map(|(key, value)| detail_row(locale.text(key), value, palette)),
+            ),
+        )
+        .children(card.unpriced.then(|| {
+            div()
+                .mt_2()
+                .text_sm()
+                .text_color(rgb(palette.warning))
+                .child(locale.text(MessageKey::ActivityUnpriced))
+        }))
+}
+
+fn rate_card(card: RateCard, locale: Locale, palette: ThemePalette) -> impl IntoElement {
+    div()
+        .max_w(px(760.0))
+        .p_4()
+        .rounded_lg()
+        .border_1()
+        .border_color(rgb(palette.border))
+        .bg(rgb(palette.surface))
+        .flex()
+        .flex_col()
+        .gap_2()
+        .child(
+            div()
+                .text_lg()
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .child(card.key),
+        )
+        .child(detail_row(
+            locale.text(MessageKey::PricingAliases),
+            card.aliases,
+            palette,
+        ))
+        .children(
+            card.detail
+                .into_iter()
+                .map(|(key, value)| detail_row(locale.text(key), value, palette)),
+        )
 }
 
 fn source_card(card: SourceCard, locale: Locale, palette: ThemePalette) -> impl IntoElement {
@@ -1527,6 +1854,14 @@ fn macos_data_directory() -> Result<PathBuf, LocalDataErrorKind> {
         .map(PathBuf::from)
         .map(|home| home.join("Library").join("Application Support"))
         .ok_or(LocalDataErrorKind::DataDirectory)
+}
+
+fn current_unix_ms() -> i64 {
+    let milliseconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    i64::try_from(milliseconds).unwrap_or(i64::MAX)
 }
 
 fn appearance_is_dark(appearance: WindowAppearance) -> bool {
