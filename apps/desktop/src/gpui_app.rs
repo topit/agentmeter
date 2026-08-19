@@ -9,12 +9,13 @@ use agentmeter_core::{
 };
 use agentmeter_desktop::{
     ActivityDimension, ActivityGranularity, ActivityLoadState, ActivityMetric, ActivityService,
-    ActivityState, LocalDataErrorKind, Locale, MessageKey, ModelCard, ModelsPricingLoadState,
-    ModelsPricingService, ModelsPricingState, OverviewLoadState, OverviewService, OverviewState,
-    PreferencesService, RateCard, Route, SessionCard, SessionsLoadState, SessionsService,
-    SessionsState, SettingsLoadState, SettingsState, ShellState, SourceCard, SourcesLoadState,
-    SourcesService, SourcesState, ThemeMode, ThemePalette, appearance_option_key,
-    language_option_key, resolved_locale, resolved_theme_mode,
+    ActivityState, ExportFormat, ExportService, ExportState, LocalDataErrorKind, Locale,
+    MessageKey, ModelCard, ModelsPricingLoadState, ModelsPricingService, ModelsPricingState,
+    OverviewLoadState, OverviewService, OverviewState, PreferencesService, RateCard, Route,
+    SessionCard, SessionsLoadState, SessionsService, SessionsState, SettingsLoadState,
+    SettingsState, ShellState, SourceCard, SourcesLoadState, SourcesService, SourcesState,
+    ThemeMode, ThemePalette, appearance_option_key, language_option_key, resolved_locale,
+    resolved_theme_mode,
 };
 use gpui::{
     AnyElement, App, Bounds, Context, IntoElement, Render, Task, TitlebarOptions, Window,
@@ -54,6 +55,7 @@ struct NavigationShell {
     _sources_task: Task<()>,
     settings: SettingsState,
     _settings_task: Task<()>,
+    export: ExportState,
     system_locale: Locale,
 }
 
@@ -244,6 +246,7 @@ impl NavigationShell {
             _sources_task: sources_task,
             settings,
             _settings_task: settings_task,
+            export: ExportState::default(),
             system_locale: locale,
         }
     }
@@ -330,6 +333,28 @@ impl NavigationShell {
             let result = save.await;
             this.update(cx, |this, cx| {
                 this.settings.apply_save_result(request, result);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Runs an explicit user-requested export through the application
+    /// service on the background executor; out-of-order completions cannot
+    /// overwrite a newer export's result.
+    fn run_export(&mut self, format: ExportFormat, cx: &mut Context<Self>) {
+        let request = self.export.begin_export();
+        let export = cx.background_executor().spawn(async move {
+            let data_directory = macos_data_directory()?;
+            ExportService::in_data_directory(data_directory)
+                .export_to_file(format, current_unix_ms())
+                .map_err(|error| error.kind())
+        });
+        cx.spawn(async move |this, cx| {
+            let result = export.await;
+            this.update(cx, |this, cx| {
+                this.export.apply_result(request, result);
                 cx.notify();
             })
             .ok();
@@ -1286,7 +1311,127 @@ impl NavigationShell {
                             .child(locale.text(MessageKey::SettingsSaveError)),
                     );
                 }
-                content.into_any_element()
+                let mut export_card = div()
+                    .p_4()
+                    .rounded_lg()
+                    .border_1()
+                    .border_color(rgb(palette.border))
+                    .bg(rgb(palette.surface))
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child(locale.text(MessageKey::SettingsExport)),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(rgb(palette.muted_text))
+                            .child(locale.text(MessageKey::SettingsExportBody)),
+                    )
+                    .child(
+                        div().flex().flex_row().flex_wrap().gap_2().children(
+                            [
+                                (
+                                    ExportFormat::Json,
+                                    "settings-export-json",
+                                    MessageKey::SettingsExportJson,
+                                ),
+                                (
+                                    ExportFormat::Csv,
+                                    "settings-export-csv",
+                                    MessageKey::SettingsExportCsv,
+                                ),
+                            ]
+                            .into_iter()
+                            .map(|(format, id, key)| {
+                                option_control(
+                                    id,
+                                    locale.text(key),
+                                    false,
+                                    palette,
+                                    move |this, _, _, cx| {
+                                        this.run_export(format, cx);
+                                    },
+                                    cx,
+                                )
+                            }),
+                        ),
+                    );
+                if self.export.running() {
+                    export_card = export_card.child(
+                        div()
+                            .text_sm()
+                            .text_color(rgb(palette.muted_text))
+                            .child(locale.text(MessageKey::SettingsLoading)),
+                    );
+                }
+                if let Some(summary) = self.export.summary() {
+                    export_card = export_card
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .child(locale.text(MessageKey::SettingsExported)),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_row()
+                                        .gap_2()
+                                        .child(
+                                            div()
+                                                .w(px(180.0))
+                                                .flex_none()
+                                                .text_sm()
+                                                .text_color(rgb(palette.muted_text))
+                                                .child(locale.text(MessageKey::SettingsExportPath)),
+                                        )
+                                        .child(div().text_sm().child(format!(
+                                            "AgentMeter/exports/{}",
+                                            summary.file_name
+                                        ))),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_row()
+                                        .gap_2()
+                                        .child(
+                                            div()
+                                                .w(px(180.0))
+                                                .flex_none()
+                                                .text_sm()
+                                                .text_color(rgb(palette.muted_text))
+                                                .child(
+                                                    locale.text(MessageKey::SettingsExportEvents),
+                                                ),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .child(locale.format_count(summary.event_count)),
+                                        ),
+                                ),
+                        );
+                }
+                if self.export.error().is_some() {
+                    export_card = export_card.child(
+                        div()
+                            .text_sm()
+                            .text_color(rgb(palette.danger))
+                            .child(locale.text(MessageKey::SettingsExportError)),
+                    );
+                }
+                content.child(export_card).into_any_element()
             }
         }
     }

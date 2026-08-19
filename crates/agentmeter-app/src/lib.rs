@@ -716,6 +716,239 @@ pub struct RepriceSummary {
     pub dataset: String,
 }
 
+/// Writes a privacy-reviewed export of the canonical event ledger to the
+/// local exports directory. Payloads contain normalized usage facts only —
+/// never source paths, warnings, provenance text, or message content — and
+/// every export is an explicit, user-triggered action.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExportService {
+    data_directory: PathBuf,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ExportFormat {
+    Json,
+    Csv,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExportSummary {
+    pub format: ExportFormat,
+    pub file_name: String,
+    pub event_count: u64,
+}
+
+impl ExportFormat {
+    pub const fn extension(self) -> &'static str {
+        match self {
+            Self::Json => "json",
+            Self::Csv => "csv",
+        }
+    }
+}
+
+impl ExportService {
+    pub fn in_data_directory(data_directory: impl AsRef<Path>) -> Self {
+        Self {
+            data_directory: data_directory.as_ref().to_owned(),
+        }
+    }
+
+    pub fn export_to_file(
+        &self,
+        format: ExportFormat,
+        observed_at_unix_ms: i64,
+    ) -> Result<ExportSummary, LocalDataServiceError> {
+        let database = open_local_database(&local_database_path(&self.data_directory))?;
+        let rows = database
+            .export_event_rows()
+            .map_err(LocalDataServiceError::Database)?;
+        let content = match format {
+            ExportFormat::Json => render_json(&rows, observed_at_unix_ms),
+            ExportFormat::Csv => render_csv(&rows),
+        };
+        let exports_directory = self.data_directory.join("AgentMeter").join("exports");
+        std::fs::create_dir_all(&exports_directory)
+            .map_err(LocalDataServiceError::DataDirectory)?;
+        let file_name = format!(
+            "agentmeter-events-{}-{}.{}",
+            compact_timestamp(observed_at_unix_ms),
+            deterministic_suffix(&content),
+            format.extension(),
+        );
+        std::fs::write(exports_directory.join(&file_name), content)
+            .map_err(LocalDataServiceError::DataDirectory)?;
+        Ok(ExportSummary {
+            format,
+            file_name,
+            event_count: rows.len() as u64,
+        })
+    }
+}
+
+/// Exact minimal decimal for a nano-USD amount, without locale formatting:
+/// `0.12` stays `0.12` and whole dollars stay integral.
+pub fn usd_decimal(value: NanoUsd) -> String {
+    let nanos = value.as_nanos();
+    let whole = nanos / 1_000_000_000;
+    let fraction = nanos % 1_000_000_000;
+    if fraction == 0 {
+        return format!("{whole}");
+    }
+    let mut fraction = format!("{fraction:09}");
+    while fraction.ends_with('0') {
+        fraction.pop();
+    }
+    format!("{whole}.{fraction}")
+}
+
+fn compact_timestamp(observed_at_unix_ms: i64) -> String {
+    let seconds = observed_at_unix_ms.div_euclid(1_000);
+    let days = seconds.div_euclid(86_400);
+    let seconds_of_day = seconds.rem_euclid(86_400);
+    let (year, month, day) = civil_from_days(days);
+    format!(
+        "{year:04}{month:02}{day:02}-{:02}{:02}{:02}",
+        seconds_of_day / 3_600,
+        seconds_of_day % 3_600 / 60,
+        seconds_of_day % 60,
+    )
+}
+
+/// Floor-division civil-date conversion so the UTC file-name stamp stays
+/// correct without a calendar dependency.
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    (year, month, day)
+}
+
+fn deterministic_suffix(content: &str) -> String {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for byte in content.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100_0000_01b3);
+    }
+    format!("{hash:016x}")
+}
+
+fn render_json(rows: &[agentmeter_storage::ExportEventRow], generated_at_unix_ms: i64) -> String {
+    let events: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|row| {
+            serde_json::json!({
+                "eventId": row.event_id,
+                "sessionId": row.session_id,
+                "client": row.client,
+                "provider": row.provider,
+                "model": row.model,
+                "occurredAtUnixMs": row.occurred_at_unix_ms,
+                "tokens": {
+                    "input": row.tokens.input,
+                    "output": row.tokens.output,
+                    "cacheRead": row.tokens.cache_read,
+                    "cacheWrite": row.tokens.cache_write,
+                    "reasoning": row.tokens.reasoning,
+                },
+                "totalTokens": row.tokens.checked_total(),
+                "sourceReportedTotal": row.source_reported_total,
+                "confidence": confidence_str(row.confidence),
+                "costs": {
+                    "providerReportedUsd": row
+                        .provider_reported_usd
+                        .map(usd_decimal),
+                    "apiEquivalentEstimateUsd": row
+                        .api_equivalent_estimate_usd
+                        .map(usd_decimal),
+                    "unpriced": row.unpriced,
+                },
+                "pricing": {
+                    "key": row.pricing_key,
+                    "rule": row.pricing_rule,
+                },
+            })
+        })
+        .collect();
+    serde_json::to_string_pretty(&serde_json::json!({
+        "format": "agentmeter-events-v1",
+        "generatedAtUnixMs": generated_at_unix_ms,
+        "eventCount": rows.len(),
+        "events": events,
+    }))
+    .expect("export JSON is always serializable")
+}
+
+fn confidence_str(confidence: agentmeter_core::DataConfidence) -> &'static str {
+    match confidence {
+        agentmeter_core::DataConfidence::Exact => "exact",
+        agentmeter_core::DataConfidence::Derived => "derived",
+        agentmeter_core::DataConfidence::Estimated => "estimated",
+    }
+}
+
+const CSV_HEADER: &str = "event_id,session_id,occurred_at_unix_ms,client,provider,model,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,reasoning_tokens,total_tokens,source_reported_total,confidence,provider_reported_usd,api_equivalent_estimate_usd,unpriced,pricing_key,pricing_rule";
+
+fn render_csv(rows: &[agentmeter_storage::ExportEventRow]) -> String {
+    let mut lines = vec![CSV_HEADER.to_owned()];
+    for row in rows {
+        let fields = [
+            row.event_id.clone(),
+            row.session_id.clone().unwrap_or_default(),
+            row.occurred_at_unix_ms.to_string(),
+            row.client.clone(),
+            row.provider.clone().unwrap_or_default(),
+            row.model.clone(),
+            row.tokens.input.to_string(),
+            row.tokens.output.to_string(),
+            row.tokens.cache_read.to_string(),
+            row.tokens.cache_write.to_string(),
+            row.tokens.reasoning.to_string(),
+            row.tokens
+                .checked_total()
+                .map(|total| total.to_string())
+                .unwrap_or_default(),
+            row.source_reported_total
+                .map(|total| total.to_string())
+                .unwrap_or_default(),
+            confidence_str(row.confidence).to_owned(),
+            row.provider_reported_usd
+                .map(usd_decimal)
+                .unwrap_or_default(),
+            row.api_equivalent_estimate_usd
+                .map(usd_decimal)
+                .unwrap_or_default(),
+            row.unpriced.to_string(),
+            row.pricing_key.clone().unwrap_or_default(),
+            row.pricing_rule.clone().unwrap_or_default(),
+        ];
+        lines.push(
+            fields
+                .into_iter()
+                .map(csv_field)
+                .collect::<Vec<_>>()
+                .join(","),
+        );
+    }
+    let mut content = lines.join("\n");
+    content.push('\n');
+    content
+}
+
+fn csv_field(value: String) -> String {
+    if value.contains(',') || value.contains('"') || value.contains('\n') {
+        format!("\"{}\"", value.replace('"', "\"\""))
+    } else {
+        value
+    }
+}
+
 #[derive(Debug)]
 pub enum LocalDataServiceError {
     DataDirectory(std::io::Error),
@@ -756,9 +989,9 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        ActivityDimension, ActivityGranularity, ActivityService, LocalDataErrorKind,
-        ModelsPricingService, OverviewService, PreferencesService, PricingService, SessionsService,
-        SourcesService,
+        ActivityDimension, ActivityGranularity, ActivityService, ExportFormat, ExportService,
+        LocalDataErrorKind, ModelsPricingService, OverviewService, PreferencesService,
+        PricingService, SessionsService, SourcesService,
     };
     use agentmeter_pricing::RateDataset;
 
@@ -1236,6 +1469,122 @@ mod tests {
                 .unwrap(),
             "an unchanged complete bundled run is not rewritten"
         );
+    }
+
+    #[test]
+    fn exports_privacy_reviewed_json_and_csv_payloads() {
+        let directory = tempdir().unwrap();
+        let database_path = directory.path().join("AgentMeter/agentmeter.db");
+        std::fs::create_dir_all(database_path.parent().unwrap()).unwrap();
+        let mut database = Database::open(&database_path).unwrap();
+        database
+            .register_source(&SourceRegistration {
+                installation_id: "installation-export".into(),
+                source_object_id: "source-export".into(),
+                adapter_id: "reference-jsonl".into(),
+                platform: "test".into(),
+                root_path: "/fixture/home/reference".into(),
+                discovery_method: "fixture".into(),
+                native_path: "/fixture/home/reference/events.jsonl".into(),
+                kind: "append_only_jsonl".into(),
+            })
+            .unwrap();
+        let mut record = pricing_record("event-export", "model-priced");
+        record.event.client = "kimi".into();
+        record.event.provider = Some("moonshot".into());
+        record.event.tokens = TokenBreakdown {
+            input: 10,
+            output: 2,
+            ..TokenBreakdown::default()
+        };
+        record.costs.push(CostFact {
+            kind: CostKind::ProviderReported,
+            usd: Some(NanoUsd::from_nanos(120_000_000)),
+            confidence: DataConfidence::Exact,
+        });
+        database
+            .apply_ingest(IngestRequest {
+                source_object_id: "source-export".into(),
+                parser_version: 1,
+                mode: WriteMode::Append,
+                source_fingerprint: "fingerprint-synthetic".into(),
+                source_len: 128,
+                byte_offset: Some(128),
+                prefix_fingerprint: Some("prefix-synthetic".into()),
+                parser_state: Vec::new(),
+                observed_at_unix_ms: 1_704_067_200_000,
+                records: vec![record],
+                warnings: vec!["diagnostic text must never leak".into()],
+            })
+            .unwrap();
+
+        let service = ExportService::in_data_directory(directory.path());
+        let summary = service
+            .export_to_file(ExportFormat::Json, 1_787_011_200_000)
+            .unwrap();
+        assert_eq!(summary.event_count, 1);
+        assert!(summary.file_name.starts_with("agentmeter-events-20260818"));
+        assert!(summary.file_name.ends_with(".json"));
+        let json = std::fs::read_to_string(
+            directory
+                .path()
+                .join("AgentMeter/exports")
+                .join(&summary.file_name),
+        )
+        .unwrap();
+        assert!(json.contains("\"format\": \"agentmeter-events-v1\""));
+        assert!(json.contains("\"eventId\": \"event-export\""));
+        assert!(json.contains("\"providerReportedUsd\": \"0.12\""));
+        assert!(
+            !json.contains("/fixture"),
+            "paths must never appear in exports"
+        );
+        assert!(
+            !json.contains("diagnostic text"),
+            "warnings must never appear"
+        );
+        assert!(!json.contains("prefix-synthetic"));
+
+        let summary = service
+            .export_to_file(ExportFormat::Csv, 1_787_011_200_000)
+            .unwrap();
+        let csv = std::fs::read_to_string(
+            directory
+                .path()
+                .join("AgentMeter/exports")
+                .join(&summary.file_name),
+        )
+        .unwrap();
+        assert!(csv.starts_with("event_id,session_id,occurred_at_unix_ms"));
+        assert!(csv.contains("event-export"));
+        assert!(
+            csv.contains("moonshot,model-priced,10,2,0,0,0,12,10,exact,0.12"),
+            "unexpected CSV rows:\n{csv}"
+        );
+        assert!(!csv.contains("/fixture"));
+        assert!(!csv.contains("diagnostic text"));
+    }
+
+    #[test]
+    fn classifies_an_export_data_directory_failure() {
+        let directory = tempdir().unwrap();
+        std::fs::write(directory.path().join("AgentMeter"), b"not a directory").unwrap();
+
+        let error = ExportService::in_data_directory(directory.path())
+            .export_to_file(ExportFormat::Csv, 0)
+            .unwrap_err();
+
+        assert_eq!(error.kind(), LocalDataErrorKind::DataDirectory);
+    }
+
+    #[test]
+    fn decimal_and_timestamp_helpers_stay_exact() {
+        use super::{compact_timestamp, usd_decimal};
+        assert_eq!(usd_decimal(NanoUsd::from_nanos(120_000_000)), "0.12");
+        assert_eq!(usd_decimal(NanoUsd::from_nanos(3_000_000_000)), "3");
+        assert_eq!(usd_decimal(NanoUsd::from_nanos(1)), "0.000000001");
+        assert_eq!(compact_timestamp(1_787_011_200_000), "20260818-000000");
+        assert_eq!(compact_timestamp(1_787_046_083_000), "20260818-094123");
     }
 
     #[test]

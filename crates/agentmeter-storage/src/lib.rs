@@ -1106,6 +1106,79 @@ impl Database {
             .map_err(Into::into)
     }
 
+    /// Every canonical event projected for user export, joined with its cost
+    /// facts. The projection deliberately excludes source paths, warnings,
+    /// provenance notes, and any diagnostic text: exports carry normalized
+    /// usage facts only.
+    pub fn export_event_rows(&self) -> Result<Vec<ExportEventRow>> {
+        let mut statement = self.connection.prepare(
+            "SELECT event.event_id, event.session_id, event.client,
+                    event.provider, event.model, event.occurred_at_unix_ms,
+                    event.input_tokens, event.output_tokens,
+                    event.cache_read_tokens, event.cache_write_tokens,
+                    event.reasoning_tokens, event.source_reported_total,
+                    event.confidence,
+                    (SELECT CAST(ROUND(cost.usd * 1000000000) AS INTEGER)
+                     FROM event_costs AS cost
+                     WHERE cost.source_object_id = event.source_object_id
+                       AND cost.event_id = event.event_id
+                       AND cost.kind = 'provider_reported'),
+                    (SELECT CAST(ROUND(cost.usd * 1000000000) AS INTEGER)
+                     FROM event_costs AS cost
+                     WHERE cost.source_object_id = event.source_object_id
+                       AND cost.event_id = event.event_id
+                       AND cost.kind = 'api_equivalent_estimate'),
+                    EXISTS(
+                        SELECT 1 FROM event_costs AS cost
+                        WHERE cost.source_object_id = event.source_object_id
+                          AND cost.event_id = event.event_id
+                          AND cost.kind = 'unpriced'
+                    ),
+                    (SELECT cost.pricing_key FROM event_costs AS cost
+                     WHERE cost.source_object_id = event.source_object_id
+                       AND cost.event_id = event.event_id
+                       AND cost.kind IN ('api_equivalent_estimate', 'unpriced')),
+                    (SELECT cost.pricing_rule FROM event_costs AS cost
+                     WHERE cost.source_object_id = event.source_object_id
+                       AND cost.event_id = event.event_id
+                       AND cost.kind IN ('api_equivalent_estimate', 'unpriced'))
+             FROM usage_events AS event
+             ORDER BY event.occurred_at_unix_ms, event.source_object_id, event.event_id",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(ExportEventRow {
+                event_id: row.get(0)?,
+                session_id: row.get(1)?,
+                client: row.get(2)?,
+                provider: nonempty(row.get(3)?),
+                model: row.get(4)?,
+                occurred_at_unix_ms: row.get(5)?,
+                tokens: TokenBreakdown {
+                    input: row.get::<_, i64>(6)? as u64,
+                    output: row.get::<_, i64>(7)? as u64,
+                    cache_read: row.get::<_, i64>(8)? as u64,
+                    cache_write: row.get::<_, i64>(9)? as u64,
+                    reasoning: row.get::<_, i64>(10)? as u64,
+                },
+                source_reported_total: row
+                    .get::<_, Option<i64>>(11)?
+                    .map(|total| total.max(0) as u64),
+                confidence: parse_confidence(&row.get::<_, String>(12)?),
+                provider_reported_usd: row
+                    .get::<_, Option<i64>>(13)?
+                    .map(|nanos| NanoUsd::from_nanos(nanos.max(0) as u64)),
+                api_equivalent_estimate_usd: row
+                    .get::<_, Option<i64>>(14)?
+                    .map(|nanos| NanoUsd::from_nanos(nanos.max(0) as u64)),
+                unpriced: row.get(15)?,
+                pricing_key: row.get(16)?,
+                pricing_rule: row.get(17)?,
+            })
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
     pub fn overview_snapshot(&self) -> Result<OverviewSnapshot> {
         let (
             input,
@@ -1916,6 +1989,26 @@ pub struct PricingStatusRow {
     pub fetched_at_unix_ms: i64,
     pub priced_event_count: u64,
     pub unpriced_event_count: u64,
+}
+
+/// One canonical event projected for user export. Excludes paths, warnings,
+/// and provenance text by design; costs arrive as exact nano-USD integers.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExportEventRow {
+    pub event_id: String,
+    pub session_id: Option<String>,
+    pub client: String,
+    pub provider: Option<String>,
+    pub model: String,
+    pub occurred_at_unix_ms: i64,
+    pub tokens: TokenBreakdown,
+    pub source_reported_total: Option<u64>,
+    pub confidence: DataConfidence,
+    pub provider_reported_usd: Option<NanoUsd>,
+    pub api_equivalent_estimate_usd: Option<NanoUsd>,
+    pub unpriced: bool,
+    pub pricing_key: Option<String>,
+    pub pricing_rule: Option<String>,
 }
 
 fn split_grouped_values(values: Option<String>) -> Vec<String> {

@@ -1,6 +1,6 @@
 # AgentMeter product and engineering plan
 
-- Status: M3 complete and CI-verified; M4 in progress — Kimi/Kimi Code adapter implemented
+- Status: M4 complete and CI-verified (five collectors, pricing, views, export); M5 macOS beta next
 - Product name: AgentMeter
 - Primary platform: macOS
 - Future platform: Windows
@@ -503,10 +503,10 @@ These decisions do not block M1 but should be settled before macOS beta:
 2. Dock application only versus optional menu-bar status item.
 3. Default headline cost: provider-reported where available versus API-equivalent estimate.
 4. Whether historical events remain after vendor source files are deleted, and default retention period.
-5. Which normalized event fields are included in exports by default.
+5. Export fields — decided in M4-09: exports carry event/session ids, the UTC millisecond timestamp, client, provider, model, the five canonical token buckets with total and source-reported total, confidence, provider-reported and API-equivalent costs with an unpriced flag, and the pricing key/rule. Paths, warnings, provenance notes, and message content are never exported.
 6. Update mechanism and distribution channels.
 7. Whether any anonymous product telemetry is ever offered; current default and v1 plan are none.
 
 ## 19. Immediate next implementation step
 
-M4-08 is implemented: Models separates exact provider/model/client identities and presents token categories, cache-read share, costs, unpriced events, usage confidence, and pricing match provenance. Pricing presents the reviewed dataset, aliases, per-million bucket rates, dataset freshness, and currently applied priced/unpriced coverage; bundled repricing remains reversible and refreshes dependent snapshots off the render path. Final verification was deferred at the user's request. Next is JSON/CSV export. Adapter work stays in the v1.1 backlog; recheck the claude-sonnet-4-7 discount before 2026-09-30.
+M4 is complete: five collectors (Amp, Codex CLI/Desktop, Pi, Kimi), reversible pricing with a seeded reviewed dataset, the Activity/Sessions/Models/Pricing views, and the privacy-reviewed JSON/CSV export are all implemented and CI-verified. The milestone moves to M5 (macOS beta): performance and retention work, launch behavior and crash recovery, signing/notarization/packaging with the user's Developer ID certificate, the pre-packaging interactive accessibility pass on a local Mac, and the privacy review plus user documentation. Before M5 exits, recheck the claude-sonnet-4-7 discount (ends 2026-09-30) and rerun the visual matrix.

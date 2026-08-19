@@ -176,6 +176,18 @@ impl Locale {
             (Self::En, MessageKey::PricingOutputRate) => "Output",
             (Self::En, MessageKey::PricingCacheReadRate) => "Cache read",
             (Self::En, MessageKey::PricingCacheWriteRate) => "Cache write",
+            (Self::En, MessageKey::SettingsExport) => "Export",
+            (Self::En, MessageKey::SettingsExportBody) => {
+                "Write every normalized usage event to a local JSON or CSV file. Exports contain usage facts only — no paths, diagnostics, or message content."
+            }
+            (Self::En, MessageKey::SettingsExportJson) => "Export JSON",
+            (Self::En, MessageKey::SettingsExportCsv) => "Export CSV",
+            (Self::En, MessageKey::SettingsExported) => "Export written",
+            (Self::En, MessageKey::SettingsExportPath) => "File",
+            (Self::En, MessageKey::SettingsExportEvents) => "Events",
+            (Self::En, MessageKey::SettingsExportError) => {
+                "AgentMeter could not write the export file."
+            }
             (Self::En, MessageKey::PricingReasoningRate) => "Reasoning",
             (Self::ZhCn, MessageKey::AppSubtitle) => "本地 Agent 用量",
             (Self::ZhCn, MessageKey::ShellPlaceholder) => {
@@ -327,6 +339,16 @@ impl Locale {
             (Self::ZhCn, MessageKey::PricingOutputRate) => "输出",
             (Self::ZhCn, MessageKey::PricingCacheReadRate) => "缓存读取",
             (Self::ZhCn, MessageKey::PricingCacheWriteRate) => "缓存写入",
+            (Self::ZhCn, MessageKey::SettingsExport) => "导出",
+            (Self::ZhCn, MessageKey::SettingsExportBody) => {
+                "将全部归一化用量事件写入本地 JSON 或 CSV 文件。导出仅包含用量数据——不含路径、诊断信息或消息内容。"
+            }
+            (Self::ZhCn, MessageKey::SettingsExportJson) => "导出 JSON",
+            (Self::ZhCn, MessageKey::SettingsExportCsv) => "导出 CSV",
+            (Self::ZhCn, MessageKey::SettingsExported) => "导出完成",
+            (Self::ZhCn, MessageKey::SettingsExportPath) => "文件",
+            (Self::ZhCn, MessageKey::SettingsExportEvents) => "事件数",
+            (Self::ZhCn, MessageKey::SettingsExportError) => "AgentMeter 无法写入导出文件。",
             (Self::ZhCn, MessageKey::PricingReasoningRate) => "推理",
         }
     }
@@ -521,6 +543,14 @@ pub enum MessageKey {
     PricingCacheReadRate,
     PricingCacheWriteRate,
     PricingReasoningRate,
+    SettingsExport,
+    SettingsExportBody,
+    SettingsExportJson,
+    SettingsExportCsv,
+    SettingsExported,
+    SettingsExportPath,
+    SettingsExportEvents,
+    SettingsExportError,
 }
 
 pub const fn confidence_key(confidence: DataConfidence) -> MessageKey {
@@ -841,6 +871,14 @@ mod tests {
             MessageKey::SettingsThemeLight,
             MessageKey::SettingsThemeDark,
             MessageKey::SettingsSaveError,
+            MessageKey::SettingsExport,
+            MessageKey::SettingsExportBody,
+            MessageKey::SettingsExportJson,
+            MessageKey::SettingsExportCsv,
+            MessageKey::SettingsExported,
+            MessageKey::SettingsExportPath,
+            MessageKey::SettingsExportEvents,
+            MessageKey::SettingsExportError,
         ] {
             assert!(!Locale::En.text(key).is_empty());
             assert!(!Locale::ZhCn.text(key).is_empty());

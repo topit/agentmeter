@@ -136,6 +136,7 @@ dependencies = [
  "agentmeter-core",
  "agentmeter-pricing",
  "agentmeter-storage",
+ "serde_json",
  "tempfile",
 ]
 

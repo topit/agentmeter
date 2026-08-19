@@ -8,6 +8,7 @@ rust-version.workspace = true
 agentmeter-core = { path = "../agentmeter-core" }
 agentmeter-pricing = { path = "../agentmeter-pricing" }
 agentmeter-storage = { path = "../agentmeter-storage" }
+serde_json = "1.0.151"
 
 [dev-dependencies]
 tempfile = "3.27.0"
