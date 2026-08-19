@@ -238,6 +238,121 @@ fn hash_activity_bytes(hash: &mut u64, bytes: &[u8]) {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SessionSummary {
+    pub source_object_id: String,
+    pub session_id: String,
+    pub adapter_id: String,
+    pub source_kind: String,
+    pub parser_version: u32,
+    pub client: String,
+    pub project: Option<String>,
+    pub started_at_unix_ms: i64,
+    pub ended_at_unix_ms: i64,
+    pub total_tokens: u64,
+    pub event_count: u64,
+    pub confidence: agentmeter_core::DataConfidence,
+    pub providers: Vec<String>,
+    pub models: Vec<String>,
+    pub provider_reported_usd: Option<NanoUsd>,
+    pub api_equivalent_estimate_usd: Option<NanoUsd>,
+    pub unpriced_event_count: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SessionsSnapshot {
+    pub generation: u64,
+    pub sessions: Vec<SessionSummary>,
+}
+
+/// Immutable content-free summaries for the Sessions screen.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SessionsService {
+    database_path: PathBuf,
+}
+
+impl SessionsService {
+    pub fn in_data_directory(data_directory: impl AsRef<Path>) -> Self {
+        Self {
+            database_path: local_database_path(data_directory.as_ref()),
+        }
+    }
+
+    pub fn load(&self) -> Result<SessionsSnapshot, LocalDataServiceError> {
+        let sessions: Vec<SessionSummary> = open_local_database(&self.database_path)?
+            .session_summaries()
+            .map_err(LocalDataServiceError::Database)?
+            .into_iter()
+            .map(|row| {
+                Ok(SessionSummary {
+                    source_object_id: row.source_object_id,
+                    session_id: row.session_id,
+                    adapter_id: row.adapter_id,
+                    source_kind: row.source_kind,
+                    parser_version: row.parser_version,
+                    client: row.client,
+                    project: row.project,
+                    started_at_unix_ms: row.started_at_unix_ms,
+                    ended_at_unix_ms: row.ended_at_unix_ms,
+                    total_tokens: row
+                        .tokens
+                        .checked_total()
+                        .ok_or(StorageError::SessionOverflow)?,
+                    event_count: row.event_count,
+                    confidence: row.confidence,
+                    providers: row.providers,
+                    models: row.models,
+                    provider_reported_usd: row.provider_reported_usd,
+                    api_equivalent_estimate_usd: row.api_equivalent_estimate_usd,
+                    unpriced_event_count: row.unpriced_event_count,
+                })
+            })
+            .collect::<Result<_, StorageError>>()
+            .map_err(LocalDataServiceError::Database)?;
+        Ok(SessionsSnapshot {
+            generation: sessions_generation(&sessions),
+            sessions,
+        })
+    }
+}
+
+fn sessions_generation(sessions: &[SessionSummary]) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for session in sessions {
+        for value in [
+            &session.source_object_id,
+            &session.session_id,
+            &session.adapter_id,
+            &session.source_kind,
+            &session.client,
+        ] {
+            hash_activity_bytes(&mut hash, value.as_bytes());
+        }
+        if let Some(project) = &session.project {
+            hash_activity_bytes(&mut hash, project.as_bytes());
+        }
+        for value in [
+            session.started_at_unix_ms as u64,
+            session.ended_at_unix_ms as u64,
+            session.total_tokens,
+            session.event_count,
+            session.provider_reported_usd.map_or(0, NanoUsd::as_nanos),
+            session
+                .api_equivalent_estimate_usd
+                .map_or(0, NanoUsd::as_nanos),
+            session.unpriced_event_count,
+            u64::from(session.parser_version),
+            session.confidence as u64,
+        ] {
+            hash_activity_bytes(&mut hash, &value.to_le_bytes());
+        }
+        for value in session.providers.iter().chain(&session.models) {
+            hash_activity_bytes(&mut hash, value.as_bytes());
+        }
+    }
+    hash
+}
+
 /// Immutable per-source collection health for the Sources screen.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SourcesService {
@@ -388,7 +503,7 @@ mod tests {
 
     use super::{
         ActivityDimension, ActivityGranularity, ActivityService, LocalDataErrorKind,
-        OverviewService, PreferencesService, PricingService, SourcesService,
+        OverviewService, PreferencesService, PricingService, SessionsService, SourcesService,
     };
     use agentmeter_pricing::RateDataset;
 
@@ -562,6 +677,129 @@ mod tests {
                 .load(ActivityGranularity::Monthly, ActivityDimension::Provider)
                 .unwrap()
         );
+    }
+
+    #[test]
+    fn loads_content_free_session_summaries_with_cost_kinds_and_confidence_separated() {
+        let directory = tempdir().unwrap();
+        let database_path = directory.path().join("AgentMeter/agentmeter.db");
+        std::fs::create_dir_all(database_path.parent().unwrap()).unwrap();
+        let mut database = Database::open(&database_path).unwrap();
+        database
+            .register_source(&SourceRegistration {
+                installation_id: "installation-sessions".into(),
+                source_object_id: "source-pricing".into(),
+                adapter_id: "reference-jsonl".into(),
+                platform: "test".into(),
+                root_path: "/fixture/home/reference".into(),
+                discovery_method: "fixture".into(),
+                native_path: "/fixture/home/reference/events.jsonl".into(),
+                kind: "append_only_jsonl".into(),
+            })
+            .unwrap();
+        let mut first = pricing_record("event-session-first", "model-a");
+        first.event.provider = Some("provider-a".into());
+        first.costs.extend([
+            CostFact {
+                kind: CostKind::ProviderReported,
+                usd: Some(NanoUsd::from_nanos(200_000_000)),
+                confidence: DataConfidence::Exact,
+            },
+            CostFact {
+                kind: CostKind::ApiEquivalentEstimate,
+                usd: Some(NanoUsd::from_nanos(100_000_000)),
+                confidence: DataConfidence::Estimated,
+            },
+        ]);
+        let mut second = pricing_record("event-session-second", "model-b");
+        second.event.occurred_at_unix_ms += 60_000;
+        second.event.provider = Some("provider-b".into());
+        second.event.confidence = DataConfidence::Derived;
+        second.costs.push(CostFact {
+            kind: CostKind::Unpriced,
+            usd: None,
+            confidence: DataConfidence::Estimated,
+        });
+        database
+            .apply_ingest(IngestRequest {
+                source_object_id: "source-pricing".into(),
+                parser_version: 3,
+                mode: WriteMode::Append,
+                source_fingerprint: "fingerprint-sessions".into(),
+                source_len: 256,
+                byte_offset: Some(256),
+                prefix_fingerprint: Some("prefix-sessions".into()),
+                parser_state: Vec::new(),
+                observed_at_unix_ms: 1_704_067_300_000,
+                records: vec![first, second],
+                warnings: Vec::new(),
+            })
+            .unwrap();
+        database
+            .register_source(&SourceRegistration {
+                installation_id: "installation-sessions-other".into(),
+                source_object_id: "source-pricing-other".into(),
+                adapter_id: "reference-jsonl".into(),
+                platform: "test".into(),
+                root_path: "/fixture/home/reference-other".into(),
+                discovery_method: "fixture".into(),
+                native_path: "/fixture/home/reference-other/events.jsonl".into(),
+                kind: "append_only_jsonl".into(),
+            })
+            .unwrap();
+        let mut same_native_session = pricing_record("event-session-other", "model-c");
+        same_native_session.event.source_id = "source-pricing-other".into();
+        same_native_session.event.occurred_at_unix_ms -= 60_000;
+        database
+            .apply_ingest(IngestRequest {
+                source_object_id: "source-pricing-other".into(),
+                parser_version: 3,
+                mode: WriteMode::Append,
+                source_fingerprint: "fingerprint-sessions-other".into(),
+                source_len: 128,
+                byte_offset: Some(128),
+                prefix_fingerprint: Some("prefix-sessions-other".into()),
+                parser_state: Vec::new(),
+                observed_at_unix_ms: 1_704_067_300_000,
+                records: vec![same_native_session],
+                warnings: Vec::new(),
+            })
+            .unwrap();
+
+        let service = SessionsService::in_data_directory(directory.path());
+        let snapshot = service.load().unwrap();
+        let session = &snapshot.sessions[0];
+
+        assert_eq!(snapshot.sessions.len(), 2);
+        assert_eq!(session.source_object_id, "source-pricing");
+        assert_eq!(session.session_id, "session-synthetic");
+        assert_eq!(snapshot.sessions[1].session_id, "session-synthetic");
+        assert_eq!(
+            snapshot.sessions[1].source_object_id,
+            "source-pricing-other"
+        );
+        assert_eq!(session.adapter_id, "reference-jsonl");
+        assert_eq!(session.parser_version, 3);
+        assert_eq!(session.project, None);
+        assert_eq!(
+            session.ended_at_unix_ms - session.started_at_unix_ms,
+            60_000
+        );
+        assert_eq!(session.total_tokens, 20);
+        assert_eq!(session.event_count, 2);
+        assert_eq!(session.confidence, DataConfidence::Derived);
+        assert_eq!(session.providers, ["provider-a", "provider-b"]);
+        assert_eq!(session.models, ["model-a", "model-b"]);
+        assert_eq!(
+            session.provider_reported_usd,
+            Some(NanoUsd::from_nanos(200_000_000))
+        );
+        assert_eq!(
+            session.api_equivalent_estimate_usd,
+            Some(NanoUsd::from_nanos(100_000_000))
+        );
+        assert_eq!(session.unpriced_event_count, 1);
+        assert_eq!(snapshot, service.load().unwrap());
     }
 
     #[test]

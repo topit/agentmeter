@@ -16,8 +16,8 @@ Every commit must include the corresponding update to this file: task status, de
 
 ## Operational reality
 
-- Base revision: `35d1901` (`Seed the bundled rate dataset from official pricing`)
-- Branch: `main`, tracking GitHub `github/main` at `topit/agentmeter`; M1 through M4-05 have been pushed
+- Base revision: `2a60a1f` (`Fit the desktop window on smaller displays`)
+- Branch: `main`, tracking GitHub `github/main` at `topit/agentmeter`; M1 through M4-06 have been pushed
 - The Amp-hosted remote is configured as `origin` for fetches only; pushes go to `github`
 - Toolchain: Rust 1.96.0; repository checks are defined in `AGENTS.md`
 - Database runtime selected for M1: bundled SQLite through `rusqlite`; no external database service
@@ -55,7 +55,8 @@ Every commit must include the corresponding update to this file: task status, de
 | M4-03 DeepSeek Harness | coordinator | `ef26398` | local contract research | deferred to v1.1 | research verdict; fixtures or documented explicit integration | user confirmed the product is the `@deepseek-ai/dsh` npm CLI (`dsh`); deferred 2026-08-19 to finish v1 core scope first; format research archived at `docs/research/deepseek-harness.md` |
 | M4-04 Pricing snapshots and estimates | coordinator | `addcd76` | reviewed rate dataset | pushed | exact-integer estimate tests; matching precedence tests; repricing storage tests | committed and pushed as `3bf7a68`; CI run `32226694932` green |
 | M4-05 Seed rate dataset | coordinator | `3bf7a68` | official pricing pages | pushed | per-rate official sources; integer conversion tests; workspace checks | committed and pushed as `35d1901`; CI run `32228441956` green |
-| M4-06 Activity view | coordinator | `35d1901` | canonical ledger and reversible estimates | pushed; layout follow-up completed | UTC aggregation tests; stale-result tests; macOS compile; workspace checks | committed and pushed as `eb72ad2`; CI run `32239288063` green; the next task reconciles the narrow-window follow-up commit and CI |
+| M4-06 Activity view | coordinator | `35d1901` | canonical ledger and reversible estimates | pushed; layout follow-up completed | UTC aggregation tests; stale-result tests; macOS compile; workspace checks | committed as `eb72ad2`; narrow-window follow-up `2a60a1f` and CI run `32239856279` are green |
+| M4-07 Sessions view | coordinator | `2a60a1f` | canonical session ledger and cost facts | completed; push pending | source-scoped aggregation tests; stale-result tests; macOS compile; workspace checks | immutable content-free session summaries and localized GPUI list complete; next is Models/Pricing |
 
 ## Verification contract
 
@@ -299,23 +300,30 @@ Every commit must include the corresponding update to this file: task status, de
 - Orb verification passed: `cargo fmt --all --check`, `cargo check --workspace --all-targets`, `cargo test --workspace` (135 tests: 125 unit tests and 10 collector-to-storage integration tests), `cargo clippy --workspace --all-targets -- -D warnings`, and `git diff --check`.
 - Apple Silicon macOS validation passed with Rust 1.96.0 after the known local-only `runtime_shaders` bypass: workspace check and Clippy passed, and all 29 desktop tests passed. The bypass was not added to the candidate. This validation found and resolved the Activity scroll container's missing stable element ID before completion.
 
+## M4-07 verification evidence
+
+- Storage returns source-scoped session summaries ordered by recent activity without joining title, path, prompt, response, or event-provenance content. Token and event totals aggregate once even when an event has multiple cost kinds; providers/models are deterministic distinct sets, and equal native session IDs from different source objects remain separate.
+- The application service exposes immutable summaries with checked token totals, stable content generations, adapter/source-kind/parser-version provenance, worst-fact confidence, separately labeled provider-reported and API-equivalent costs, and explicit unpriced-event counts.
+- Portable desktop state rejects stale snapshots and errors. Content-free cards localize duration, missing projects/costs, confidence, and every loading/empty/error/detail label in English and Simplified Chinese. GPUI loads off the render path and renders a stable-ID scroll list using semantic theme colors.
+- The hosted macOS visual matrix is configured to seed only synthetic session, usage, and cost rows and capture the populated Sessions route in all four locale/theme combinations; no local Agent history is read.
+- Orb verification passed: `cargo fmt --all --check`, `cargo check --workspace --all-targets`, `cargo test --workspace` (139 tests: 129 unit tests and 10 collector-to-storage integration tests), `cargo clippy --workspace --all-targets -- -D warnings`, `git diff --check`, and the privacy-pattern scan (only policy examples and intentional `/fixture/home/...` paths matched).
+
 ## Development handoff
 
-Handoff point: the completed M4-06 Activity view candidate, based on `35d1901` on GitHub `topit/agentmeter`, branch `main`. M4-05 was reconciled to `35d1901` with CI run `32228441956` green. The next task begins by reconciling M4-06 with its commit, push, and CI evidence, then starts the Sessions view.
+Handoff point: the completed M4-07 Sessions view candidate, based on `2a60a1f` on GitHub `topit/agentmeter`, branch `main`. M4-06 and its narrow-window follow-up are reconciled to `eb72ad2`/`2a60a1f` with CI run `32239856279` green. The next task begins by reconciling M4-07 with its commit, push, and CI evidence, then starts Models/Pricing.
 
 ### Product and implementation state
 
 - M1 and M2 are complete. The canonical SQLite ledger, reference ingestion contracts, Amp/Codex/Pi collectors, source-health model, provider-reported costs, reconciliation reports, Codex compressed rollouts, and Pi legacy/current discovery are implemented with synthetic fixture coverage.
 - M3 is complete and exited. GPUI is pinned to Zed revision `c24358d96cdb4ce14ecbc088462295353b0103f0`; the shell, Overview, Sources, and Settings are implemented and verified on hosted Apple Silicon runners with the full locale/theme visual matrix (see the M3-06 evidence). CI reruns the Linux gates, the production-feature macOS gates, and the matrix on every push to `main`.
-- M4-01 (Kimi/Kimi Code), M4-02 (Codex Desktop), M4-04 (pricing core), M4-05 (seeded rate dataset `2026-08-19.1`), and M4-06 (Activity) are complete. Roadmap decision 2026-08-19: DeepSeek Harness (`dsh`) joined the v1.1 backlog (research archived at `docs/research/deepseek-harness.md`, alongside `docs/research/factory-droid.md`). The next bounded tasks are the remaining M4 core scope: Sessions, Models/Pricing, and JSON/CSV export.
+- M4-01 (Kimi/Kimi Code), M4-02 (Codex Desktop), M4-04 (pricing core), M4-05 (seeded rate dataset `2026-08-19.1`), M4-06 (Activity), and M4-07 (Sessions) are complete. Roadmap decision 2026-08-19: DeepSeek Harness (`dsh`) joined the v1.1 backlog (research archived at `docs/research/deepseek-harness.md`, alongside `docs/research/factory-droid.md`). The next bounded tasks are Models/Pricing and JSON/CSV export.
 
 ### Ownership map for the next task
 
-- `crates/agentmeter-storage/src/lib.rs`: the v1 `sessions`, `usage_events`, provenance, and cost tables own session facts; add one deterministic summary query rather than querying SQLite from presentation code.
-- `crates/agentmeter-app/src/lib.rs`: follow `ActivityService` for immutable local-database snapshots, checked aggregation, and presentation-safe error classification.
-- `apps/desktop/src/activity.rs`, `overview.rs`, and `sources.rs`: reference patterns for request generations, stale completion rejection, and loading/empty/error classification.
-- `apps/desktop/src/i18n.rs`: typed exhaustive English and Simplified Chinese catalog; session fields, confidence, empty/error states, and accessibility labels need both locales.
-- `apps/desktop/src/gpui_app.rs`: Sessions is currently a placeholder route. Keep its query on `background_executor`, apply only immutable results through the entity context, and use `ThemePalette` semantic tokens.
+- `crates/agentmeter-pricing/src/lib.rs`: the reviewed versioned rate dataset and exact matching rules are the pricing source of truth.
+- `crates/agentmeter-storage/src/lib.rs`: pricing snapshots and event-cost projections own persisted estimate provenance; add deterministic read queries rather than querying SQLite from presentation code.
+- `crates/agentmeter-app/src/lib.rs`: follow the immutable Overview/Activity/Sessions services for presentation-safe snapshots and errors.
+- `apps/desktop/src/i18n.rs` and `gpui_app.rs`: Models and Pricing are placeholder routes; implement complete English/Chinese states with semantic theme tokens and off-render-path loading.
 
 ### M3 status: exited via CI evidence
 

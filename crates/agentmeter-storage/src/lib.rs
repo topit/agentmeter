@@ -174,6 +174,8 @@ pub enum StorageError {
     OverviewOverflow,
     #[error("usage or cost totals overflowed while building an activity snapshot")]
     ActivityOverflow,
+    #[error("usage or cost totals overflowed while building a session snapshot")]
+    SessionOverflow,
     #[error("stored {field} preference has an unsupported value: {value}")]
     InvalidPreference { field: &'static str, value: String },
     #[error("failed to serialize diagnostics: {0}")]
@@ -844,6 +846,104 @@ impl Database {
                     .get::<_, Option<i64>>(12)?
                     .map(|nanos| NanoUsd::from_nanos(nanos as u64)),
                 unpriced_event_count: row.get::<_, i64>(13)? as u64,
+            })
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    /// Immutable, content-free session summaries ordered by most recent
+    /// activity. Prompt, response, title, and path content are never joined.
+    pub fn session_summaries(&self) -> Result<Vec<SessionSummaryRow>> {
+        let mut statement = self.connection.prepare(
+            "SELECT session.source_object_id, session.session_id,
+                    installation.adapter_id, source.kind, source.parser_version,
+                    session.client, session.project,
+                    session.started_at_unix_ms, session.ended_at_unix_ms,
+                    SUM(event.input_tokens), SUM(event.output_tokens),
+                    SUM(event.cache_read_tokens), SUM(event.cache_write_tokens),
+                    SUM(event.reasoning_tokens), COUNT(*),
+                    CASE MAX(CASE event.confidence
+                        WHEN 'estimated' THEN 2 WHEN 'derived' THEN 1 ELSE 0 END)
+                        WHEN 2 THEN 'estimated' WHEN 1 THEN 'derived' ELSE 'exact' END,
+                    (SELECT GROUP_CONCAT(value, char(31)) FROM (
+                        SELECT DISTINCT nested.provider AS value
+                        FROM usage_events AS nested
+                        WHERE nested.source_object_id = session.source_object_id
+                          AND nested.session_id = session.session_id
+                          AND nested.provider != ''
+                        ORDER BY value
+                    )),
+                    (SELECT GROUP_CONCAT(value, char(31)) FROM (
+                        SELECT DISTINCT nested.model AS value
+                        FROM usage_events AS nested
+                        WHERE nested.source_object_id = session.source_object_id
+                          AND nested.session_id = session.session_id
+                        ORDER BY value
+                    )),
+                    (SELECT SUM(CAST(ROUND(cost.usd * 1000000000) AS INTEGER))
+                     FROM event_costs AS cost
+                     JOIN usage_events AS cost_event
+                       ON cost_event.source_object_id = cost.source_object_id
+                      AND cost_event.event_id = cost.event_id
+                     WHERE cost_event.source_object_id = session.source_object_id
+                       AND cost_event.session_id = session.session_id
+                       AND cost.kind = 'provider_reported'),
+                    (SELECT SUM(CAST(ROUND(cost.usd * 1000000000) AS INTEGER))
+                     FROM event_costs AS cost
+                     JOIN usage_events AS cost_event
+                       ON cost_event.source_object_id = cost.source_object_id
+                      AND cost_event.event_id = cost.event_id
+                     WHERE cost_event.source_object_id = session.source_object_id
+                       AND cost_event.session_id = session.session_id
+                       AND cost.kind = 'api_equivalent_estimate'),
+                    (SELECT COUNT(*)
+                     FROM event_costs AS cost
+                     JOIN usage_events AS cost_event
+                       ON cost_event.source_object_id = cost.source_object_id
+                      AND cost_event.event_id = cost.event_id
+                     WHERE cost_event.source_object_id = session.source_object_id
+                       AND cost_event.session_id = session.session_id
+                       AND cost.kind = 'unpriced')
+             FROM sessions AS session
+             JOIN source_objects AS source ON source.id = session.source_object_id
+             JOIN source_installations AS installation ON installation.id = source.installation_id
+             JOIN usage_events AS event
+               ON event.source_object_id = session.source_object_id
+              AND event.session_id = session.session_id
+             GROUP BY session.source_object_id, session.session_id
+             ORDER BY session.ended_at_unix_ms DESC,
+                      session.source_object_id, session.session_id",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(SessionSummaryRow {
+                source_object_id: row.get(0)?,
+                session_id: row.get(1)?,
+                adapter_id: row.get(2)?,
+                source_kind: row.get(3)?,
+                parser_version: row.get::<_, i64>(4)? as u32,
+                client: row.get(5)?,
+                project: row.get::<_, Option<String>>(6)?.and_then(nonempty),
+                started_at_unix_ms: row.get(7)?,
+                ended_at_unix_ms: row.get(8)?,
+                tokens: TokenBreakdown {
+                    input: row.get::<_, i64>(9)? as u64,
+                    output: row.get::<_, i64>(10)? as u64,
+                    cache_read: row.get::<_, i64>(11)? as u64,
+                    cache_write: row.get::<_, i64>(12)? as u64,
+                    reasoning: row.get::<_, i64>(13)? as u64,
+                },
+                event_count: row.get::<_, i64>(14)? as u64,
+                confidence: parse_confidence(&row.get::<_, String>(15)?),
+                providers: split_grouped_values(row.get(16)?),
+                models: split_grouped_values(row.get(17)?),
+                provider_reported_usd: row
+                    .get::<_, Option<i64>>(18)?
+                    .map(|nanos| NanoUsd::from_nanos(nanos as u64)),
+                api_equivalent_estimate_usd: row
+                    .get::<_, Option<i64>>(19)?
+                    .map(|nanos| NanoUsd::from_nanos(nanos as u64)),
+                unpriced_event_count: row.get::<_, i64>(20)? as u64,
             })
         })?;
         rows.collect::<std::result::Result<Vec<_>, _>>()
@@ -1613,6 +1713,33 @@ pub struct ActivityDailyRow {
     pub event_count: u64,
     pub api_equivalent_estimate_usd: Option<NanoUsd>,
     pub unpriced_event_count: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SessionSummaryRow {
+    pub source_object_id: String,
+    pub session_id: String,
+    pub adapter_id: String,
+    pub source_kind: String,
+    pub parser_version: u32,
+    pub client: String,
+    pub project: Option<String>,
+    pub started_at_unix_ms: i64,
+    pub ended_at_unix_ms: i64,
+    pub tokens: TokenBreakdown,
+    pub event_count: u64,
+    pub confidence: DataConfidence,
+    pub providers: Vec<String>,
+    pub models: Vec<String>,
+    pub provider_reported_usd: Option<NanoUsd>,
+    pub api_equivalent_estimate_usd: Option<NanoUsd>,
+    pub unpriced_event_count: u64,
+}
+
+fn split_grouped_values(values: Option<String>) -> Vec<String> {
+    values
+        .map(|values| values.split('\u{1f}').map(str::to_owned).collect())
+        .unwrap_or_default()
 }
 
 fn upsert_installation(

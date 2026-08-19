@@ -1,6 +1,6 @@
 use agentmeter_core::{
-    AppearancePreference, LanguagePreference, NanoUsd, SourceHealthState, SourcePermissionState,
-    SourceRemediation,
+    AppearancePreference, DataConfidence, LanguagePreference, NanoUsd, SourceHealthState,
+    SourcePermissionState, SourceRemediation,
 };
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -123,6 +123,27 @@ impl Locale {
             (Self::En, MessageKey::ActivityProvider) => "Provider",
             (Self::En, MessageKey::ActivityModel) => "Model",
             (Self::En, MessageKey::ActivityUnpriced) => "Includes unpriced events",
+            (Self::En, MessageKey::SessionsLoading) => "Loading sessions…",
+            (Self::En, MessageKey::SessionsEmptyTitle) => "No sessions recorded yet",
+            (Self::En, MessageKey::SessionsEmptyBody) => {
+                "Sessions will appear after usage with a source session identifier is collected."
+            }
+            (Self::En, MessageKey::SessionsErrorTitle) => "Sessions unavailable",
+            (Self::En, MessageKey::SessionsSessionId) => "Session ID",
+            (Self::En, MessageKey::SessionsStarted) => "Started",
+            (Self::En, MessageKey::SessionsDuration) => "Duration",
+            (Self::En, MessageKey::SessionsProject) => "Project",
+            (Self::En, MessageKey::SessionsClient) => "Client",
+            (Self::En, MessageKey::SessionsProvider) => "Provider",
+            (Self::En, MessageKey::SessionsModel) => "Model",
+            (Self::En, MessageKey::SessionsEvents) => "Events",
+            (Self::En, MessageKey::SessionsConfidence) => "Confidence",
+            (Self::En, MessageKey::SessionsAdapter) => "Adapter",
+            (Self::En, MessageKey::SessionsSourceKind) => "Source type",
+            (Self::En, MessageKey::SessionsParserVersion) => "Parser version",
+            (Self::En, MessageKey::ConfidenceExact) => "Exact",
+            (Self::En, MessageKey::ConfidenceDerived) => "Derived",
+            (Self::En, MessageKey::ConfidenceEstimated) => "Estimated",
             (Self::ZhCn, MessageKey::AppSubtitle) => "本地 Agent 用量",
             (Self::ZhCn, MessageKey::ShellPlaceholder) => {
                 "本地数据快照可用后，用量视图将在这里显示。"
@@ -220,6 +241,27 @@ impl Locale {
             (Self::ZhCn, MessageKey::ActivityProvider) => "服务商",
             (Self::ZhCn, MessageKey::ActivityModel) => "模型",
             (Self::ZhCn, MessageKey::ActivityUnpriced) => "包含未计价事件",
+            (Self::ZhCn, MessageKey::SessionsLoading) => "正在加载会话…",
+            (Self::ZhCn, MessageKey::SessionsEmptyTitle) => "暂无会话记录",
+            (Self::ZhCn, MessageKey::SessionsEmptyBody) => {
+                "采集到带数据源会话标识的用量后，会话将在这里显示。"
+            }
+            (Self::ZhCn, MessageKey::SessionsErrorTitle) => "会话暂不可用",
+            (Self::ZhCn, MessageKey::SessionsSessionId) => "会话 ID",
+            (Self::ZhCn, MessageKey::SessionsStarted) => "开始时间",
+            (Self::ZhCn, MessageKey::SessionsDuration) => "时长",
+            (Self::ZhCn, MessageKey::SessionsProject) => "项目",
+            (Self::ZhCn, MessageKey::SessionsClient) => "客户端",
+            (Self::ZhCn, MessageKey::SessionsProvider) => "服务商",
+            (Self::ZhCn, MessageKey::SessionsModel) => "模型",
+            (Self::ZhCn, MessageKey::SessionsEvents) => "事件数",
+            (Self::ZhCn, MessageKey::SessionsConfidence) => "置信度",
+            (Self::ZhCn, MessageKey::SessionsAdapter) => "适配器",
+            (Self::ZhCn, MessageKey::SessionsSourceKind) => "数据源类型",
+            (Self::ZhCn, MessageKey::SessionsParserVersion) => "解析器版本",
+            (Self::ZhCn, MessageKey::ConfidenceExact) => "精确",
+            (Self::ZhCn, MessageKey::ConfidenceDerived) => "推导",
+            (Self::ZhCn, MessageKey::ConfidenceEstimated) => "估算",
         }
     }
 
@@ -249,6 +291,19 @@ impl Locale {
             Self::ZhCn => "US$",
         };
         format!("{prefix}{}.{fraction}", self.format_count(whole))
+    }
+
+    pub fn format_duration_ms(self, duration_ms: i64) -> String {
+        let seconds = duration_ms.max(0) / 1_000;
+        let hours = seconds / 3_600;
+        let minutes = seconds % 3_600 / 60;
+        let seconds = seconds % 60;
+        match (self, hours) {
+            (Self::En, 0) => format!("{minutes}m {seconds}s"),
+            (Self::En, _) => format!("{hours}h {minutes}m"),
+            (Self::ZhCn, 0) => format!("{minutes}分 {seconds}秒"),
+            (Self::ZhCn, _) => format!("{hours}小时 {minutes}分"),
+        }
     }
 
     /// Formats a Unix millisecond instant as an explicitly UTC timestamp so
@@ -342,6 +397,33 @@ pub enum MessageKey {
     ActivityProvider,
     ActivityModel,
     ActivityUnpriced,
+    SessionsLoading,
+    SessionsEmptyTitle,
+    SessionsEmptyBody,
+    SessionsErrorTitle,
+    SessionsSessionId,
+    SessionsStarted,
+    SessionsDuration,
+    SessionsProject,
+    SessionsClient,
+    SessionsProvider,
+    SessionsModel,
+    SessionsEvents,
+    SessionsConfidence,
+    SessionsAdapter,
+    SessionsSourceKind,
+    SessionsParserVersion,
+    ConfidenceExact,
+    ConfidenceDerived,
+    ConfidenceEstimated,
+}
+
+pub const fn confidence_key(confidence: DataConfidence) -> MessageKey {
+    match confidence {
+        DataConfidence::Exact => MessageKey::ConfidenceExact,
+        DataConfidence::Derived => MessageKey::ConfidenceDerived,
+        DataConfidence::Estimated => MessageKey::ConfidenceEstimated,
+    }
 }
 
 pub fn health_state_key(state: SourceHealthState) -> MessageKey {
@@ -494,6 +576,35 @@ mod tests {
             MessageKey::ActivityProvider,
             MessageKey::ActivityModel,
             MessageKey::ActivityUnpriced,
+        ] {
+            assert!(!Locale::En.text(key).is_empty());
+            assert!(!Locale::ZhCn.text(key).is_empty());
+            assert_ne!(Locale::En.text(key), Locale::ZhCn.text(key));
+        }
+    }
+
+    #[test]
+    fn localizes_every_sessions_state_label_and_confidence() {
+        for key in [
+            MessageKey::SessionsLoading,
+            MessageKey::SessionsEmptyTitle,
+            MessageKey::SessionsEmptyBody,
+            MessageKey::SessionsErrorTitle,
+            MessageKey::SessionsSessionId,
+            MessageKey::SessionsStarted,
+            MessageKey::SessionsDuration,
+            MessageKey::SessionsProject,
+            MessageKey::SessionsClient,
+            MessageKey::SessionsProvider,
+            MessageKey::SessionsModel,
+            MessageKey::SessionsEvents,
+            MessageKey::SessionsConfidence,
+            MessageKey::SessionsAdapter,
+            MessageKey::SessionsSourceKind,
+            MessageKey::SessionsParserVersion,
+            MessageKey::ConfidenceExact,
+            MessageKey::ConfidenceDerived,
+            MessageKey::ConfidenceEstimated,
         ] {
             assert!(!Locale::En.text(key).is_empty());
             assert!(!Locale::ZhCn.text(key).is_empty());

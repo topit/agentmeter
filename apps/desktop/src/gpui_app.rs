@@ -9,9 +9,10 @@ use agentmeter_core::{
 use agentmeter_desktop::{
     ActivityDimension, ActivityGranularity, ActivityLoadState, ActivityMetric, ActivityService,
     ActivityState, LocalDataErrorKind, Locale, MessageKey, OverviewLoadState, OverviewService,
-    OverviewState, PreferencesService, Route, SettingsLoadState, SettingsState, ShellState,
-    SourceCard, SourcesLoadState, SourcesService, SourcesState, ThemeMode, ThemePalette,
-    appearance_option_key, language_option_key, resolved_locale, resolved_theme_mode,
+    OverviewState, PreferencesService, Route, SessionCard, SessionsLoadState, SessionsService,
+    SessionsState, SettingsLoadState, SettingsState, ShellState, SourceCard, SourcesLoadState,
+    SourcesService, SourcesState, ThemeMode, ThemePalette, appearance_option_key,
+    language_option_key, resolved_locale, resolved_theme_mode,
 };
 use gpui::{
     AnyElement, App, Bounds, Context, IntoElement, Render, Task, TitlebarOptions, Window,
@@ -43,6 +44,8 @@ struct NavigationShell {
     _overview_task: Task<()>,
     activity: ActivityState,
     _activity_task: Task<()>,
+    sessions: SessionsState,
+    _sessions_task: Task<()>,
     sources: SourcesState,
     _sources_task: Task<()>,
     settings: SettingsState,
@@ -120,6 +123,30 @@ impl NavigationShell {
             .ok();
         });
 
+        let mut sessions = SessionsState::default();
+        let request = sessions.begin_request();
+        let load = cx.background_executor().spawn(async move {
+            let data_directory = macos_data_directory()?;
+            SessionsService::in_data_directory(data_directory)
+                .load()
+                .map_err(|error| error.kind())
+        });
+        let sessions_task = cx.spawn(async move |this, cx| {
+            let result = load.await;
+            this.update(cx, |this, cx| {
+                match result {
+                    Ok(snapshot) => {
+                        this.sessions.apply_snapshot(request, snapshot);
+                    }
+                    Err(error) => {
+                        this.sessions.apply_error(request, error);
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        });
+
         let mut sources = SourcesState::default();
         let request = sources.begin_request();
         let load = cx.background_executor().spawn(async move {
@@ -176,6 +203,8 @@ impl NavigationShell {
             _overview_task: overview_task,
             activity,
             _activity_task: activity_task,
+            sessions,
+            _sessions_task: sessions_task,
             sources,
             _sources_task: sources_task,
             settings,
@@ -726,6 +755,83 @@ impl NavigationShell {
             .into_any_element()
     }
 
+    fn sessions_content(&self, palette: ThemePalette) -> AnyElement {
+        let locale = self.state.locale();
+        match self.sessions.load_state() {
+            SessionsLoadState::Loading => div()
+                .mt_3()
+                .text_color(rgb(palette.muted_text))
+                .child(locale.text(MessageKey::SessionsLoading))
+                .into_any_element(),
+            SessionsLoadState::Empty => div()
+                .mt_6()
+                .max_w(px(560.0))
+                .p_6()
+                .rounded_lg()
+                .border_1()
+                .border_color(rgb(palette.border))
+                .bg(rgb(palette.surface))
+                .child(
+                    div()
+                        .text_lg()
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .child(locale.text(MessageKey::SessionsEmptyTitle)),
+                )
+                .child(
+                    div()
+                        .mt_2()
+                        .text_color(rgb(palette.muted_text))
+                        .child(locale.text(MessageKey::SessionsEmptyBody)),
+                )
+                .into_any_element(),
+            SessionsLoadState::Error(error) => {
+                let message = match error {
+                    LocalDataErrorKind::DataDirectory => MessageKey::OverviewDataDirectoryError,
+                    LocalDataErrorKind::Database => MessageKey::OverviewDatabaseError,
+                };
+                div()
+                    .mt_6()
+                    .max_w(px(560.0))
+                    .p_6()
+                    .rounded_lg()
+                    .border_1()
+                    .border_color(rgb(palette.border))
+                    .bg(rgb(palette.surface))
+                    .child(
+                        div()
+                            .text_lg()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child(locale.text(MessageKey::SessionsErrorTitle)),
+                    )
+                    .child(
+                        div()
+                            .mt_2()
+                            .text_color(rgb(palette.muted_text))
+                            .child(locale.text(message)),
+                    )
+                    .into_any_element()
+            }
+            SessionsLoadState::Populated => {
+                let snapshot = self
+                    .sessions
+                    .snapshot()
+                    .expect("populated sessions state must contain a snapshot");
+                div()
+                    .id("sessions-list")
+                    .mt_5()
+                    .max_h(px(600.0))
+                    .overflow_y_scroll()
+                    .flex()
+                    .flex_col()
+                    .gap_4()
+                    .children(snapshot.sessions.iter().map(|session| {
+                        session_card(SessionCard::from_summary(session, locale), locale, palette)
+                    }))
+                    .into_any_element()
+            }
+        }
+    }
+
     fn sources_content(&self, palette: ThemePalette) -> AnyElement {
         let locale = self.state.locale();
         match self.sources.load_state() {
@@ -1104,6 +1210,8 @@ impl Render for NavigationShell {
                     self.overview_content(palette)
                 } else if selected == Route::Activity {
                     self.activity_content(palette, cx)
+                } else if selected == Route::Sessions {
+                    self.sessions_content(palette)
                 } else if selected == Route::Sources {
                     self.sources_content(palette)
                 } else if selected == Route::Settings {
@@ -1200,6 +1308,45 @@ fn status_palette_color(state: SourceHealthState, palette: ThemePalette) -> u32 
         SourceHealthState::Error => palette.danger,
         SourceHealthState::Disabled => palette.muted_text,
     }
+}
+
+fn session_card(card: SessionCard, locale: Locale, palette: ThemePalette) -> impl IntoElement {
+    div()
+        .max_w(px(760.0))
+        .p_4()
+        .rounded_lg()
+        .border_1()
+        .border_color(rgb(palette.border))
+        .bg(rgb(palette.surface))
+        .flex()
+        .flex_col()
+        .gap_2()
+        .child(
+            div()
+                .text_sm()
+                .text_color(rgb(palette.muted_text))
+                .child(locale.text(MessageKey::SessionsSessionId)),
+        )
+        .child(
+            div()
+                .text_lg()
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .child(card.session_id),
+        )
+        .child(
+            div().mt_2().flex().flex_col().gap_1().children(
+                card.detail
+                    .into_iter()
+                    .map(|(key, value)| detail_row(locale.text(key), value, palette)),
+            ),
+        )
+        .children(card.unpriced.then(|| {
+            div()
+                .mt_2()
+                .text_sm()
+                .text_color(rgb(palette.warning))
+                .child(locale.text(MessageKey::ActivityUnpriced))
+        }))
 }
 
 fn source_card(card: SourceCard, locale: Locale, palette: ThemePalette) -> impl IntoElement {
