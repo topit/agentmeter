@@ -3,6 +3,7 @@
 pub mod amp;
 pub mod codex;
 mod file_support;
+pub mod kimi;
 pub mod pi;
 pub mod reference;
 

@@ -19,7 +19,9 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use crate::{
     CollectorAdapter, CollectorError, IngestBatch, IngestMode, IngestStart, SourceCandidate,
     SourceCheckpoint, SourceKind,
-    file_support::{checkpoint_continues, ensure_kind, hash_file, hash_prefix, io_error},
+    file_support::{
+        checkpoint_continues, ensure_kind, expand_home, hash_file, hash_prefix, io_error,
+    },
 };
 
 const PARSER_VERSION: u32 = 2;
@@ -697,19 +699,6 @@ fn decode_state(bytes: &[u8]) -> Result<ParserState, CollectorError> {
         serde_json::from_slice(bytes)
             .map_err(|error| CollectorError::new(format!("invalid Pi parser state: {error}")))
     }
-}
-
-fn expand_home(value: impl AsRef<std::ffi::OsStr>) -> PathBuf {
-    let path = PathBuf::from(value.as_ref());
-    let text = path.to_string_lossy();
-    let suffix = text.strip_prefix("~/").or_else(|| text.strip_prefix("~\\"));
-    suffix
-        .and_then(|suffix| {
-            env::var_os("HOME")
-                .or_else(|| env::var_os("USERPROFILE"))
-                .map(|home| PathBuf::from(home).join(suffix))
-        })
-        .unwrap_or(path)
 }
 
 fn parse_rfc3339_millis(value: &str) -> Option<i64> {

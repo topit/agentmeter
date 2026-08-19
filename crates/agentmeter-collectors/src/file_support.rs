@@ -1,8 +1,27 @@
-use std::{fmt::Write as _, fs::File, io::Read, path::Path};
+use std::{
+    env,
+    fmt::Write as _,
+    fs::File,
+    io::Read,
+    path::{Path, PathBuf},
+};
 
 use sha2::{Digest, Sha256};
 
 use crate::{CollectorError, SourceCandidate, SourceCheckpoint, SourceKind};
+
+pub(crate) fn expand_home(value: impl AsRef<std::ffi::OsStr>) -> PathBuf {
+    let path = PathBuf::from(value.as_ref());
+    let text = path.to_string_lossy();
+    let suffix = text.strip_prefix("~/").or_else(|| text.strip_prefix("~\\"));
+    suffix
+        .and_then(|suffix| {
+            env::var_os("HOME")
+                .or_else(|| env::var_os("USERPROFILE"))
+                .map(|home| PathBuf::from(home).join(suffix))
+        })
+        .unwrap_or(path)
+}
 
 pub(crate) fn checkpoint_continues(
     path: &Path,

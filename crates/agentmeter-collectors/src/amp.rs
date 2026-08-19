@@ -292,7 +292,7 @@ impl UsageTokens {
     }
 }
 
-pub(super) fn modified_unix_ms(metadata: &std::fs::Metadata) -> Result<i64, CollectorError> {
+pub(crate) fn modified_unix_ms(metadata: &std::fs::Metadata) -> Result<i64, CollectorError> {
     let duration = metadata
         .modified()
         .map_err(io_error)?

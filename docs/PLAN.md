@@ -1,6 +1,6 @@
 # AgentMeter product and engineering plan
 
-- Status: M3 complete and CI-verified (shell, overview, sources, settings; visual matrix on every push); M4 coverage and pricing next
+- Status: M3 complete and CI-verified; M4 in progress — Kimi/Kimi Code adapter implemented
 - Product name: AgentMeter
 - Primary platform: macOS
 - Future platform: Windows
@@ -198,6 +198,8 @@ Recommended SQLite defaults: WAL, foreign keys on, busy timeout, and `synchronou
 | Grok bot/remote agents | export/API/OTel | opt-in import | no local source on the desktop |
 
 Amp's documented `--stream-json` output is implemented as a separate opt-in, append-only source. It is authoritative for token field names but does not expose event timestamps, model/provider identity, or a native per-event ID. Local `threads/*.json` parsing remains an explicitly experimental path because Amp does not publish that persistence schema; third-party parsers are cross-check evidence, not a compatibility guarantee.
+
+Kimi/Kimi Code is implemented for both upstream `wire.jsonl` layouts (`kimi-cli` `StatusUpdate` records and `kimi-code` flat `usage.record` records). Both report one delta per LLM request; session-scoped records are real spend and are counted, diverging from ccusage/tokscale, which skip them. Cross-file fork copies are not yet deduplicated and are recorded as follow-up work in `docs/STATUS.md`.
 
 ### Definition of supported
 
@@ -500,4 +502,4 @@ These decisions do not block M1 but should be settled before macOS beta:
 
 ## 19. Immediate next implementation step
 
-M3 is complete and exited with CI evidence. Start M4-01: research Kimi/Kimi Code's local `wire.jsonl` old/new layouts from upstream sources, then implement the adapter following the M2 pattern — discovery, sanitized fixtures for normal/duplicate/malformed/truncated/schema-drift cases, incremental checkpoints or a documented bounded replacement, health states and remediation, and cross-checked totals. CI keeps validating every push; the local Mac's Metal Toolchain repair is optional until interactive pre-packaging work begins.
+M4-01 (Kimi/Kimi Code) is complete. Start M4-02: research Factory Droid's local session settings snapshots from upstream sources, then implement the adapter — latest-snapshot-per-session semantics, bounded replacement strategy for the "no per-turn history" risk, sanitized fixtures for normal/malformed/schema-drift cases, health states, and a storage pipeline cross-check. After Factory Droid, M4-03 covers Grok Build CLI before the pricing-snapshot work.

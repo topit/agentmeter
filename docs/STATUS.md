@@ -49,7 +49,8 @@ Every commit must include the corresponding update to this file: task status, de
 | M3-03 Overview presentation | coordinator | `a6d6002` | immutable overview snapshot | pushed; native visual validation pending | off-render-path loading tests; localized state tests; representative UI verification | committed and pushed as `ec266ee`; runtime visual matrix remains blocked by the Metal Toolchain |
 | M3-04 Sources presentation | coordinator | `ec266ee` | source-health snapshots | pushed | localized remediation-state tests; stale-result tests; representative UI verification | committed and pushed as `3898451`; native visual validation remains blocked by the missing Metal Toolchain |
 | M3-05 Settings presentation | coordinator | `3898451` | preferences persistence contract | pushed | preference round-trip tests; persistence and stale-save tests; workspace checks | committed and pushed as `b28fea0` |
-| M3-06 CI native validation | coordinator | `b28fea0` | public-repository CI budget | pushed | green macOS runner runs; reviewed screenshot matrix artifacts | committed and pushed as `9952d9a` (first green matrix) and `e597ab0` (matrix driven by persisted preferences); artifacts reviewed and M3 exited |
+| M3-06 CI native validation | coordinator | `b28fea0` | public-repository CI budget | pushed | green macOS runner runs; reviewed screenshot matrix artifacts | committed and pushed as `9952d9a` and `e597ab0`; evidence recorded in `9c2eb9d` whose CI run is green; M3 exited |
+| M4-01 Kimi/Kimi Code adapter | coordinator | `9c2eb9d` | upstream wire.jsonl format research | completed | fixture and cross-check suite; storage pipeline; workspace checks | Kimi wire adapter implemented for both legacy and current layouts; the next task reconciles this row with the actual commit and push |
 
 ## Verification contract
 
@@ -244,14 +245,26 @@ Every commit must include the corresponding update to this file: task status, de
 - **M3 exit criteria are met**: representative UI states verified in all four locale/theme combinations from production-feature builds on hardware with a working Metal Toolchain. An interactive keyboard-focus and accessibility pass on a local Mac remains recommended before M5 packaging.
 - Tests: 107 total (98 unit tests and 9 collector-to-storage integration tests).
 
+## M4-01 verification evidence
+
+- Upstream research: two Kimi products write `wire.jsonl` journals. The frozen Python `kimi-cli` uses `KIMI_SHARE_DIR`/`~/.kimi` with `{"timestamp", "message": {type, payload}}` records and reports usage on `StatusUpdate.token_usage` (with a provider `message_id`). The current TypeScript `kimi-code` uses `KIMI_CODE_HOME`/`~/.kimi-code` with flat `{"type", ..., "time"}` records and reports usage on `usage.record` (`usage.{inputOther,output,inputCacheRead,inputCacheCreation}`, `usageScope`). Facts were read from MoonshotAI/kimi-cli and MoonshotAI/kimi-code source; ccusage and tokscale were cross-checks only.
+- Both layouts report one delta per completed LLM request, so records sum directly without a cumulative-to-delta state machine. `step.end` copies of per-step usage, `goal.update` budgets, and `token_counting.*` estimates are ignored; zero-usage lines are skipped with visible warnings.
+- Deliberate divergence from ccusage/tokscale: session-scoped `usage.record`s (compaction, title generation) are real per-request deltas and are counted, with the scope retained in provenance notes; the community parsers skip them and undercount.
+- Canonical buckets: `input_other`→input, `output`→output (reasoning included; `reasoning: 0` with a note), `input_cache_read`→cache read, `input_cache_creation`→cache write. Legacy files carry no model and stay unattributed; flat records strip the `kimi-code/` prefix and fall back to the checkpointed last concrete `llm.request` model for symbolic placeholders like `__kimi_env_model__`.
+- Identity: legacy `message_id` is the native id; within one batch repeats keep the larger total with warnings and equal repeats are skipped; fallback fingerprints are versioned and scoped to source lineage. Flat records have no upstream ids and use a versioned per-source fingerprint over (time, raw model, buckets, scope). Checkpoints commit at newline boundaries, carry parser state across appends, and detect protocol-migration rewrites through prefix fingerprints (transactional Replace).
+- Known v1 limitation recorded for follow-up: legacy `/fork` and the new CLI's forks copy wire prefixes into new session directories without lineage markers; cross-source duplicates are not yet deduplicated (ccusage also double counts them). Cross-batch identity conflicts surface as visible storage errors rather than silent double counting.
+- `cargo fmt --all --check`, `cargo check --workspace --all-targets`, `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, and `git diff --check` passed on the user's Mac with the temporary local-only `runtime_shaders` bypass, reverted before committing.
+- Tests: 120 total (110 unit tests and 10 collector-to-storage integration tests), including the Kimi adapter fixture suite (discovery for both layouts and subagents, delta parsing, duplicate/step-end handling, symbolic-model fallback, timestamp fallback, zero/malformed/truncated cases, append resume, migration rewrite, parser-state resume) and the collector-to-storage pipeline asserting exact canonical daily totals and a fixture cross-check.
+
 ## Development handoff
 
-Handoff point: the M3 exit evidence commit on GitHub `topit/agentmeter`, branch `main`, written directly after `e597ab0`. M3 is exited; the next task is M4-01 (Kimi/Kimi Code adapter) and begins by reconciling this evidence commit's push result.
+Handoff point: the M4-01 Kimi adapter commit on GitHub `topit/agentmeter`, branch `main`, written directly after `9c2eb9d`. The next task begins by reconciling this commit's push result and the CI run, then starts M4-02 (Factory Droid adapter).
 
 ### Product and implementation state
 
 - M1 and M2 are complete. The canonical SQLite ledger, reference ingestion contracts, Amp/Codex/Pi collectors, source-health model, provider-reported costs, reconciliation reports, Codex compressed rollouts, and Pi legacy/current discovery are implemented with synthetic fixture coverage.
 - M3 is complete and exited. GPUI is pinned to Zed revision `c24358d96cdb4ce14ecbc088462295353b0103f0`; the shell, Overview, Sources, and Settings are implemented and verified on hosted Apple Silicon runners with the full locale/theme visual matrix (see the M3-06 evidence). CI reruns the Linux gates, the production-feature macOS gates, and the matrix on every push to `main`.
+- M4-01 (Kimi/Kimi Code) is implemented: both `wire.jsonl` layouts, delta semantics, duplicate handling, and the storage pipeline are covered by synthetic fixtures. The next bounded task is M4-02, the Factory Droid adapter (session settings snapshots, latest-per-session semantics per `docs/PLAN.md` section 7).
 
 ### Ownership map for the next task
 
@@ -266,7 +279,7 @@ Handoff point: the M3 exit evidence commit on GitHub `topit/agentmeter`, branch 
 
 M3 acceptance is complete: production-feature builds on hosted Apple Silicon runners (working Metal Toolchain) plus the reviewed 12-shot visual matrix from run `32141838068`. Every push to `main` re-runs the matrix automatically. The local Mac's missing Metal Toolchain no longer blocks any milestone work; repair it only when local interactive development (launching, keyboard-focus, and accessibility inspection) is desired, and re-verify interactively before M5 packaging.
 
-The next bounded task is M4-01, the Kimi/Kimi Code adapter, per the source roadmap in `docs/PLAN.md` section 7. Research the local `wire.jsonl` old/new layouts from upstream sources first, then follow the M2 adapter pattern (discovery, fixtures for normal/duplicate/malformed/truncated/schema-drift, incremental checkpoints, health states, cross-check report) before wiring any UI.
+The current milestone is M4; see the ledger above and the ownership map below.
 
 ### Required verification and macOS limitation
 
@@ -286,7 +299,7 @@ Native launch and visual acceptance remain blocked on the user's Mac: the Metal 
 
 ### Workflow constraints
 
-- Reconcile the preceding ledger row with its actual commit at the start of every task; M3-06 was reconciled to `9952d9a` and `e597ab0`, and the M3 exit evidence commit still needs its push reconciled.
+- Reconcile the preceding ledger row with its actual commit at the start of every task; M3-06 was reconciled to `9c2eb9d`, and M4-01 still needs reconciliation with its commit and CI run.
 - Update this file before every commit. Update `docs/PLAN.md` in the same commit whenever scope, roadmap order, acceptance criteria, or the immediate next step changes.
 - Commit each completed step and push only to GitHub `main`. In this checkout the GitHub remote is named `origin` (`git@github.com:topit/agentmeter.git`); port-22 SSH hangs on this network, so push through `ssh://git@ssh.github.com:443/topit/agentmeter.git` until the proxy forwards port 22.
 - Use synthetic fixtures only. Never read or commit real agent histories, prompts, responses, tool payloads, account IDs, secrets, or real home paths.
