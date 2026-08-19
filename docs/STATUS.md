@@ -53,7 +53,8 @@ Every commit must include the corresponding update to this file: task status, de
 | M4-01 Kimi/Kimi Code adapter | coordinator | `9c2eb9d` | upstream wire.jsonl format research | pushed | fixture and cross-check suite; storage pipeline; workspace checks | committed and pushed as `8cf9974`; CI run `32207108342` green on Linux and macOS |
 | M4-02 Codex Desktop adapter | coordinator | `8cf9974` | shared Codex home / container storage research | pushed | fixture and cross-check suite; storage pipeline; workspace checks | committed and pushed as `ef26398`; CI run `32208756268` green |
 | M4-03 DeepSeek Harness | coordinator | `ef26398` | local contract research | deferred to v1.1 | research verdict; fixtures or documented explicit integration | user confirmed the product is the `@deepseek-ai/dsh` npm CLI (`dsh`); deferred 2026-08-19 to finish v1 core scope first; format research archived at `docs/research/deepseek-harness.md` |
-| M4-04 Pricing snapshots and estimates | coordinator | `addcd76` | reviewed rate dataset | completed | exact-integer estimate tests; matching precedence tests; repricing storage tests | pricing crate, snapshot ledger, and reversible repricing implemented; the next task reconciles this row with the actual commit and push |
+| M4-04 Pricing snapshots and estimates | coordinator | `addcd76` | reviewed rate dataset | pushed | exact-integer estimate tests; matching precedence tests; repricing storage tests | committed and pushed as `3bf7a68`; CI run `32226694932` green |
+| M4-05 Seed rate dataset | coordinator | `3bf7a68` | official pricing pages | completed | per-rate official sources; integer conversion tests; workspace checks | bundled dataset `2026-08-19.1` seeded from verified official pages; the next task reconciles this row with the actual commit and push |
 
 ## Verification contract
 
@@ -279,15 +280,25 @@ Every commit must include the corresponding update to this file: task status, de
 - Tests: 131 total (121 unit tests and 10 collector-to-storage integration tests): exact per-bucket integer math, precedence ordering, alias rule recording, unpriced/overflow behavior, versioned empty bundled dataset, stable content hashing, snapshot idempotence, estimate replacement with provider-reported preservation and unpriced visibility, end-to-end service repricing reversibility, and data-directory failure classification.
 - `cargo fmt --all --check`, `cargo check --workspace --all-targets`, `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, and `git diff --check` passed on the user's Mac with the temporary local-only `runtime_shaders` bypass, reverted before committing.
 
+## M4-05 verification evidence
+
+- Official pricing pages were fetched and quoted verbatim on 2026-08-19: developers.openai.com/api/docs/pricing, platform.kimi.ai/docs/pricing, platform.claude.com/docs/en/about-claude/pricing, and api-docs.deepseek.com/quick_start/pricing. Every seeded rate's source, listed prices, and documented inferences are recorded in `docs/research/rates-2026-08-19.md`.
+- The bundled dataset `agentmeter-reviewed@2026-08-19.1` seeds 16 canonical models — gpt-5.3-codex plus the gpt-5.6 family (explicit cache-write tiers), kimi-k2.7-code/-highspeed and kimi-k3, seven Claude generations (5-minute cache-write tier, thinking at output rate), and deepseek-v4-flash/-pro (peak tier) — all as integer nano-USD per token (USD-per-million × 1_000, integral for every listed price including $56.25 and $15.625 writes).
+- Four official aliases: `kimi-for-coding`/`-highspeed` → the kimi-k2.7-code family (kimi.com/code mapping) and the retired `deepseek-chat`/`deepseek-reasoner` → deepseek-v4-flash (official changelog), so historical logs price correctly.
+- Documented conservative inferences, recorded in code and the sources file: cache writes bill at the input rate where no write price is listed (OpenAI codex, Kimi, DeepSeek); reasoning is priced as output where only one output rate exists; gpt-5.3-codex Fast mode and DeepSeek off-peak windows are not yet distinguishable, so such usage is under-/over-estimated respectively; claude-sonnet-4-7 carries its time-limited discount ending 2026-09-30 and must be rechecked.
+- Models absent from official pages (for example any `codex-mini` variant) deliberately stay unpriced.
+- Tests: 131 total (121 unit and 10 integration) — the bundled-dataset test now verifies seeded rates, alias pricing through `kimi-for-coding`, integral $56.25 conversion, and that unlisted models remain unpriced.
+- `cargo fmt --all --check`, `cargo check --workspace --all-targets`, `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, and `git diff --check` passed on the user's Mac with the temporary local-only `runtime_shaders` bypass, reverted before committing.
+
 ## Development handoff
 
-Handoff point: the M4-04 pricing commit on GitHub `topit/agentmeter`, branch `main`, written directly after `addcd76`. M4-02 was reconciled to `ef26398` with CI run `32208756268` green. The next task begins by reconciling M4-04 with its commit and CI run, then starts M4-05 (Activity view).
+Handoff point: the M4-05 seed dataset commit on GitHub `topit/agentmeter`, branch `main`, written directly after `3bf7a68`. M4-04 was reconciled to `3bf7a68` with CI run `32226694932` green. The next task begins by reconciling M4-05 with its commit and CI run, then starts M4-06 (Activity view).
 
 ### Product and implementation state
 
 - M1 and M2 are complete. The canonical SQLite ledger, reference ingestion contracts, Amp/Codex/Pi collectors, source-health model, provider-reported costs, reconciliation reports, Codex compressed rollouts, and Pi legacy/current discovery are implemented with synthetic fixture coverage.
 - M3 is complete and exited. GPUI is pinned to Zed revision `c24358d96cdb4ce14ecbc088462295353b0103f0`; the shell, Overview, Sources, and Settings are implemented and verified on hosted Apple Silicon runners with the full locale/theme visual matrix (see the M3-06 evidence). CI reruns the Linux gates, the production-feature macOS gates, and the matrix on every push to `main`.
-- M4-01 (Kimi/Kimi Code) and M4-02 (Codex Desktop) are implemented, and M4-04 (pricing snapshots and reversible estimates) is complete across the pricing, storage, and application layers; the bundled dataset ships empty until rates are reviewed against official pricing. Roadmap decision 2026-08-19: DeepSeek Harness (`dsh`) joined the v1.1 backlog (research archived at `docs/research/deepseek-harness.md`, alongside `docs/research/factory-droid.md`). The next bounded tasks are the remaining M4 core scope: seeding the reviewed rate dataset, the Activity/Sessions/Models/Pricing views, and JSON/CSV export.
+- M4-01 (Kimi/Kimi Code), M4-02 (Codex Desktop), M4-04 (pricing core), and M4-05 (seeded rate dataset `2026-08-19.1` from verified official pages, sources in `docs/research/rates-2026-08-19.md`) are complete. Roadmap decision 2026-08-19: DeepSeek Harness (`dsh`) joined the v1.1 backlog (research archived at `docs/research/deepseek-harness.md`, alongside `docs/research/factory-droid.md`). The next bounded tasks are the remaining M4 core scope: the Activity/Sessions/Models/Pricing views and JSON/CSV export.
 
 ### Ownership map for the next task
 

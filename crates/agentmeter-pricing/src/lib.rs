@@ -11,7 +11,209 @@ use std::collections::BTreeMap;
 use agentmeter_core::{CostKind, DataConfidence, NanoUsd, TokenBreakdown};
 
 pub const BUNDLED_SOURCE: &str = "agentmeter-reviewed";
-pub const BUNDLED_VERSION: &str = "2026-08-19.0";
+pub const BUNDLED_VERSION: &str = "2026-08-19.1";
+
+/// Verified seed rates, nano-USD per token (USD-per-million × 1_000). Every
+/// entry and its documented inferences are recorded with sources in
+/// `docs/research/rates-2026-08-19.md`.
+const SEED_RATES: &[(&str, ModelRates)] = &[
+    // developers.openai.com/api/docs/pricing — gpt-5.3-codex, Standard tier.
+    // Cache-write bills as regular input (no write premium listed); one
+    // output price, so reasoning is priced as output. Fast-mode usage is
+    // underestimated until tiers are distinguishable.
+    (
+        "gpt-5.3-codex",
+        ModelRates {
+            input: 1_750,
+            output: 14_000,
+            cache_read: 175,
+            cache_write: 1_750,
+            reasoning: 14_000,
+        },
+    ),
+    // developers.openai.com/api/docs/pricing — gpt-5.6 family with explicit
+    // cache-write columns; reasoning priced as output.
+    (
+        "gpt-5.6-terra",
+        ModelRates {
+            input: 2_000,
+            output: 12_000,
+            cache_read: 200,
+            cache_write: 2_500,
+            reasoning: 12_000,
+        },
+    ),
+    (
+        "gpt-5.6-sol",
+        ModelRates {
+            input: 5_000,
+            output: 30_000,
+            cache_read: 500,
+            cache_write: 6_250,
+            reasoning: 30_000,
+        },
+    ),
+    (
+        "gpt-5.6-luna",
+        ModelRates {
+            input: 200,
+            output: 1_200,
+            cache_read: 20,
+            cache_write: 250,
+            reasoning: 1_200,
+        },
+    ),
+    (
+        "gpt-5.6-cyber",
+        ModelRates {
+            input: 12_500,
+            output: 75_000,
+            cache_read: 1_250,
+            cache_write: 15_625,
+            reasoning: 75_000,
+        },
+    ),
+    // platform.kimi.ai/docs/pricing — cache miss/hit listed; cache write
+    // bills as a cache miss, reasoning inside output.
+    (
+        "kimi-k2.7-code",
+        ModelRates {
+            input: 950,
+            output: 4_000,
+            cache_read: 190,
+            cache_write: 950,
+            reasoning: 4_000,
+        },
+    ),
+    (
+        "kimi-k2.7-code-highspeed",
+        ModelRates {
+            input: 1_900,
+            output: 8_000,
+            cache_read: 380,
+            cache_write: 1_900,
+            reasoning: 8_000,
+        },
+    ),
+    (
+        "kimi-k3",
+        ModelRates {
+            input: 3_000,
+            output: 15_000,
+            cache_read: 300,
+            cache_write: 3_000,
+            reasoning: 15_000,
+        },
+    ),
+    // platform.claude.com/docs/en/about-claude/pricing — 5-minute cache
+    // write tier; thinking billed at the output rate per official docs.
+    // claude-sonnet-4-7 carries the time-limited discount ending
+    // 2026-09-30.
+    (
+        "claude-opus-5-5",
+        ModelRates {
+            input: 45_000,
+            output: 225_000,
+            cache_read: 4_500,
+            cache_write: 56_250,
+            reasoning: 225_000,
+        },
+    ),
+    (
+        "claude-sonnet-4-7",
+        ModelRates {
+            input: 3_000,
+            output: 15_000,
+            cache_read: 300,
+            cache_write: 3_750,
+            reasoning: 15_000,
+        },
+    ),
+    (
+        "claude-haiku-4-6",
+        ModelRates {
+            input: 1_000,
+            output: 5_000,
+            cache_read: 100,
+            cache_write: 1_250,
+            reasoning: 5_000,
+        },
+    ),
+    (
+        "claude-opus-4-5",
+        ModelRates {
+            input: 15_000,
+            output: 75_000,
+            cache_read: 1_500,
+            cache_write: 18_750,
+            reasoning: 75_000,
+        },
+    ),
+    (
+        "claude-opus-4-1",
+        ModelRates {
+            input: 15_000,
+            output: 75_000,
+            cache_read: 1_500,
+            cache_write: 18_750,
+            reasoning: 75_000,
+        },
+    ),
+    (
+        "claude-sonnet-4-5",
+        ModelRates {
+            input: 3_000,
+            output: 15_000,
+            cache_read: 300,
+            cache_write: 3_750,
+            reasoning: 15_000,
+        },
+    ),
+    (
+        "claude-haiku-4-5",
+        ModelRates {
+            input: 1_000,
+            output: 5_000,
+            cache_read: 100,
+            cache_write: 1_250,
+            reasoning: 5_000,
+        },
+    ),
+    // api-docs.deepseek.com/quick_start/pricing — peak-tier prices; the
+    // half-price off-peak windows are not yet modeled, so off-peak usage is
+    // overestimated.
+    (
+        "deepseek-v4-flash",
+        ModelRates {
+            input: 440,
+            output: 1_320,
+            cache_read: 14,
+            cache_write: 440,
+            reasoning: 1_320,
+        },
+    ),
+    (
+        "deepseek-v4-pro",
+        ModelRates {
+            input: 1_320,
+            output: 3_960,
+            cache_read: 44,
+            cache_write: 1_320,
+            reasoning: 3_960,
+        },
+    ),
+];
+
+/// Reviewed aliases; both mappings are official. Kimi documents
+/// `kimi-for-coding` as the CLI alias of `kimi-k2.7-code`
+/// (kimi.com/code/docs/en), and DeepSeek's changelog maps the retired
+/// `deepseek-chat`/`deepseek-reasoner` ids onto `deepseek-v4-flash` modes.
+const SEED_ALIASES: &[(&str, &str)] = &[
+    ("kimi-for-coding", "kimi-k2.7-code"),
+    ("kimi-for-coding-highspeed", "kimi-k2.7-code-highspeed"),
+    ("deepseek-chat", "deepseek-v4-flash"),
+    ("deepseek-reasoner", "deepseek-v4-flash"),
+];
 
 /// Integer nano-USD per token. Rates like $3 per million input tokens are
 /// exactly 3_000 nano-USD per token, so per-token rates stay integral for
@@ -62,16 +264,27 @@ pub enum RateMatch<'a> {
 }
 
 impl RateDataset {
-    /// The dataset shipped with the application. It starts empty by design:
-    /// rates enter only after review against official provider pricing, and
-    /// until then every model is visibly unpriced.
+    /// The dataset shipped with the application, seeded only from rates
+    /// verified against official provider pricing pages on 2026-08-19 (see
+    /// `docs/research/rates-2026-08-19.md` for the per-model sources,
+    /// verbatim prices, and documented inferences). Anything not listed
+    /// there stays visibly unpriced.
     pub fn bundled() -> Self {
-        Self {
+        let mut dataset = Self {
             source: BUNDLED_SOURCE.to_owned(),
             version: BUNDLED_VERSION.to_owned(),
             rates: BTreeMap::new(),
             aliases: BTreeMap::new(),
+        };
+        for (key, rates) in SEED_RATES {
+            dataset.rates.insert((*key).to_owned(), *rates);
         }
+        for (alias, canonical) in SEED_ALIASES {
+            dataset
+                .aliases
+                .insert((*alias).to_owned(), (*canonical).to_owned());
+        }
+        dataset
     }
 
     /// Matching precedence: exact provider-qualified match, then exact bare
@@ -344,18 +557,46 @@ mod tests {
     }
 
     #[test]
-    fn bundled_dataset_is_versioned_and_starts_empty() {
+    fn bundled_dataset_is_versioned_and_seed_verified() {
         let bundled = RateDataset::bundled();
 
         assert_eq!(bundled.source, BUNDLED_SOURCE);
         assert_eq!(bundled.version, BUNDLED_VERSION);
-        assert!(bundled.rates.is_empty());
-        assert!(bundled.aliases.is_empty());
+        assert_eq!(
+            bundled.rates["gpt-5.3-codex"],
+            ModelRates {
+                input: 1_750,
+                output: 14_000,
+                cache_read: 175,
+                cache_write: 1_750,
+                reasoning: 14_000,
+            }
+        );
+        assert!(bundled.rates.contains_key("claude-opus-5-5"));
+        // $56.25 per million cache-write tokens stays integral in nanos.
+        assert_eq!(bundled.rates["claude-opus-5-5"].cache_write, 56_250);
+        assert!(bundled.rates.contains_key("deepseek-v4-flash"));
+
+        let estimate = bundled.estimate(
+            None,
+            "kimi-for-coding",
+            TokenBreakdown {
+                input: 1_000_000,
+                ..TokenBreakdown::default()
+            },
+        );
+        assert_eq!(
+            estimate.usd,
+            Some(NanoUsd::from_nanos(950_000_000)),
+            "the CLI alias prices at the official kimi-k2.7-code miss rate"
+        );
+        assert_eq!(estimate.pricing_key.as_deref(), Some("kimi-k2.7-code"));
+
         assert_eq!(
             bundled
                 .estimate(
                     None,
-                    "any-model",
+                    "gpt-5.3-codex-mini",
                     TokenBreakdown {
                         input: 1,
                         ..TokenBreakdown::default()
@@ -363,7 +604,8 @@ mod tests {
                 )
                 .pricing_rule
                 .as_deref(),
-            Some("unpriced:no-match")
+            Some("unpriced:no-match"),
+            "models absent from official pricing pages stay unpriced"
         );
     }
 
