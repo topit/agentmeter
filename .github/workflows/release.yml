@@ -1,0 +1,69 @@
+name: Release package
+
+# Manual for now; tags can trigger it once signing is real.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BUNDLE_ID: com.topit.agentmeter
+
+jobs:
+  package-macos:
+    name: macOS app bundle and DMG
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - name: Verify the Metal Toolchain is available
+        run: xcrun metal --version
+      - name: Build the desktop app (release)
+        run: cargo build --release -p agentmeter-desktop
+      - name: Assemble the .app bundle
+        run: |
+          set -euo pipefail
+          APP="AgentMeter.app"
+          CONTENTS="$APP/Contents"
+          mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
+          cp target/release/agentmeter-desktop "$CONTENTS/MacOS/AgentMeter"
+          cat > "$CONTENTS/Info.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleExecutable</key><string>AgentMeter</string>
+            <key>CFBundleIdentifier</key><string>${BUNDLE_ID}</string>
+            <key>CFBundleName</key><string>AgentMeter</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleShortVersionString</key><string>0.1.0</string>
+            <key>CFBundleVersion</key><string>0.1.0</string>
+            <key>LSMinimumSystemVersion</key><string>14.0</string>
+            <key>NSHighResolutionCapable</key><true/>
+          </dict>
+          </plist>
+          PLIST
+          # Signing hook: once the Developer ID certificate is available as
+          # secrets (MACOS_SIGNING_IDENTITY, APPLE_API_KEY*, see AGENTS/PLAN),
+          # codesign --deep --options runtime --timestamp --sign runs here,
+          # followed by notarytool submission. Until then the bundle ships
+          # unsigned for local testing.
+          if [ -n "${MACOS_SIGNING_IDENTITY:-}" ]; then
+            echo "::error::signing secrets are configured but the signing steps are not implemented yet"
+            exit 1
+          fi
+      - name: Create the DMG
+        run: |
+          set -euo pipefail
+          hdiutil create -volname AgentMeter -srcfolder AgentMeter.app \
+            -ov -format UDZO AgentMeter.dmg
+      - name: Upload the package
+        uses: actions/upload-artifact@v4
+        with:
+          name: AgentMeter-macos-${{ github.sha }}
+          path: |
+            AgentMeter.dmg
+            AgentMeter.app/Contents/Info.plist

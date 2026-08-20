@@ -499,14 +499,14 @@ Do not optimize against invented workloads. Record benchmark fixture sizes and p
 
 These decisions do not block M1 but should be settled before macOS beta:
 
-1. Bundle identifier.
+1. Bundle identifier — decided in M5-04: `com.topit.agentmeter`.
 2. Dock application only versus optional menu-bar status item.
 3. Default headline cost: provider-reported where available versus API-equivalent estimate.
-4. Whether historical events remain after vendor source files are deleted, and default retention period.
+4. Retention — decided in M5-04: history is the durable record; events remain after vendor source files are deleted, with no automatic deletion in 1.0. A retention setting can arrive later if users ask for it.
 5. Export fields — decided in M4-09: exports carry event/session ids, the UTC millisecond timestamp, client, provider, model, the five canonical token buckets with total and source-reported total, confidence, provider-reported and API-equivalent costs with an unpriced flag, and the pricing key/rule. Paths, warnings, provenance notes, and message content are never exported.
 6. Update mechanism and distribution channels.
 7. Whether any anonymous product telemetry is ever offered; current default and v1 plan are none.
 
 ## 19. Immediate next implementation step
 
-M5-03 (cancellable cold rebuild) is complete: cooperative cancellation checks sit between source-owned transactions, cancelled scans return committed partial work, and the Sources view offers a real cancel command. Next in M5: retention — settle open decision 4 (history is kept after vendor source deletion; the ledger is the durable record) by documenting the v1.0 behavior and adding a Settings-visible retention description, then signing/notarization/packaging once the user's Developer ID certificate is available, followed by the pre-packaging interactive accessibility pass.
+M5-04 settled open decisions 1 (bundle id `com.topit.agentmeter`) and 4 (history survives vendor source deletion; no automatic deletion in 1.0), proved the retention behavior with a test, added a localized Data-and-privacy Settings card, and landed a manual release workflow that builds the .app and DMG. Remaining M5: implement codesign/notarytool in the release workflow once the user's Developer ID certificate is available, run the pre-packaging interactive accessibility pass after the local Metal Toolchain repair, and finish the privacy review plus user documentation (README refresh covering collection, retention, and export).

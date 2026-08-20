@@ -193,6 +193,10 @@ impl Locale {
             (Self::En, MessageKey::SourcesScanError) => "AgentMeter could not scan local sources.",
             (Self::En, MessageKey::SourcesCancelScan) => "Cancel scan",
             (Self::En, MessageKey::SourcesScanCancelled) => "Scan cancelled.",
+            (Self::En, MessageKey::SettingsData) => "Data and privacy",
+            (Self::En, MessageKey::SettingsDataBody) => {
+                "Usage history is stored locally and kept even after agent files are deleted, until you remove AgentMeter's data yourself. Nothing leaves this machine except the files you export above."
+            }
             (Self::En, MessageKey::PricingReasoningRate) => "Reasoning",
             (Self::ZhCn, MessageKey::AppSubtitle) => "本地 Agent 用量",
             (Self::ZhCn, MessageKey::ShellPlaceholder) => {
@@ -359,6 +363,10 @@ impl Locale {
             (Self::ZhCn, MessageKey::SourcesScanError) => "AgentMeter 无法扫描本地数据源。",
             (Self::ZhCn, MessageKey::SourcesCancelScan) => "取消扫描",
             (Self::ZhCn, MessageKey::SourcesScanCancelled) => "扫描已取消。",
+            (Self::ZhCn, MessageKey::SettingsData) => "数据与隐私",
+            (Self::ZhCn, MessageKey::SettingsDataBody) => {
+                "用量历史保存在本地，即使 Agent 的文件被删除也会保留，直到你自行删除 AgentMeter 的数据。除你在上方导出的文件外，不会有任何数据离开这台设备。"
+            }
             (Self::ZhCn, MessageKey::PricingReasoningRate) => "推理",
         }
     }
@@ -566,6 +574,8 @@ pub enum MessageKey {
     SourcesScanError,
     SourcesCancelScan,
     SourcesScanCancelled,
+    SettingsData,
+    SettingsDataBody,
 }
 
 pub const fn confidence_key(confidence: DataConfidence) -> MessageKey {
@@ -899,6 +909,8 @@ mod tests {
             MessageKey::SourcesScanError,
             MessageKey::SourcesCancelScan,
             MessageKey::SourcesScanCancelled,
+            MessageKey::SettingsData,
+            MessageKey::SettingsDataBody,
         ] {
             assert!(!Locale::En.text(key).is_empty());
             assert!(!Locale::ZhCn.text(key).is_empty());

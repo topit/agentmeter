@@ -2110,6 +2110,68 @@ mod tests {
         );
     }
 
+    #[test]
+    fn vendor_file_deletion_keeps_history_without_failures() {
+        let data_directory = tempdir().unwrap();
+        let kimi_root = tempdir().unwrap();
+        let wire = {
+            let directory = kimi_root
+                .path()
+                .join("sessions")
+                .join("wd_retention")
+                .join("session_aa000000-0000-4000-8000-00000000000a")
+                .join("agents")
+                .join("main");
+            std::fs::create_dir_all(&directory).unwrap();
+            let wire = directory.join("wire.jsonl");
+            std::fs::write(
+                &wire,
+                r#"{"type":"metadata","protocol_version":"1.5"}
+{"type":"usage.record","model":"kimi-code/kimi-for-coding","usage":{"inputOther":100,"output":20,"inputCacheRead":0,"inputCacheCreation":0},"usageScope":"turn","time":1782113000000}
+"#,
+            )
+            .unwrap();
+            wire
+        };
+
+        let service = IngestionService::with_adapters(
+            data_directory.path(),
+            vec![(
+                kimi_root.path().to_owned(),
+                Box::new(KimiWireAdapter::new(kimi_root.path())),
+            )],
+        );
+        service.scan_and_ingest(1_787_011_200_000).unwrap();
+        let database_path = data_directory.path().join("AgentMeter/agentmeter.db");
+        assert_eq!(
+            Database::open(&database_path)
+                .unwrap()
+                .overview_snapshot()
+                .unwrap()
+                .event_count,
+            1
+        );
+
+        // The v1.0 retention decision: deleting the vendor journal keeps the
+        // canonical history; the next scan simply no longer discovers it and
+        // records no failure.
+        std::fs::remove_file(&wire).unwrap();
+        let after_deletion = service.scan_and_ingest(1_787_011_300_000).unwrap();
+
+        assert_eq!(after_deletion.runs[0].discovered_sources, 0);
+        assert_eq!(after_deletion.runs[0].failed_sources, 0);
+        let database = Database::open(&database_path).unwrap();
+        let overview = database.overview_snapshot().unwrap();
+        assert_eq!(overview.event_count, 1, "history is the durable record");
+        let health = database.source_health_snapshot().unwrap();
+        assert_eq!(health.sources.len(), 1);
+        assert_ne!(
+            health.sources[0].state,
+            agentmeter_core::SourceHealthState::Error,
+            "a deleted vendor file is not a collection failure"
+        );
+    }
+
     /// One Kimi agent journal holding a single usage delta.
     fn write_kimi_usage(root: &std::path::Path, session: &str, time: u64) {
         let directory = root

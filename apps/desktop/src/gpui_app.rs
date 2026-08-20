@@ -1484,7 +1484,32 @@ impl NavigationShell {
                             .child(locale.text(MessageKey::SettingsExportError)),
                     );
                 }
-                content.child(export_card).into_any_element()
+                content
+                    .child(export_card)
+                    .child(
+                        div()
+                            .p_4()
+                            .rounded_lg()
+                            .border_1()
+                            .border_color(rgb(palette.border))
+                            .bg(rgb(palette.surface))
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .child(locale.text(MessageKey::SettingsData)),
+                            )
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(rgb(palette.muted_text))
+                                    .child(locale.text(MessageKey::SettingsDataBody)),
+                            ),
+                    )
+                    .into_any_element()
             }
         }
     }
