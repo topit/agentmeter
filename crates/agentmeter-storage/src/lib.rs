@@ -449,6 +449,7 @@ impl Database {
             let inserted = insert_record(&transaction, &request.source_object_id, record)?;
             if inserted {
                 inserted_records += 1;
+                upsert_daily_delta(&transaction, record)?;
             } else {
                 duplicate_records += 1;
             }
@@ -487,7 +488,12 @@ impl Database {
             params![request.source_object_id],
         )?;
 
-        rebuild_daily_usage_in(&transaction)?;
+        // Appends project incrementally; a source-owned replacement (the
+        // only path that deletes events) still rebuilds the whole
+        // projection. A zero-record warm append touches nothing.
+        if request.mode == WriteMode::Replace {
+            rebuild_daily_usage_in(&transaction)?;
+        }
         transaction.execute(
             "UPDATE ingest_runs SET
                 status = 'completed',
@@ -2456,6 +2462,40 @@ fn rebuild_daily_usage_in(transaction: &Transaction<'_>) -> Result<()> {
     Ok(())
 }
 
+/// Applies one inserted event to the daily projection inside the same
+/// transaction, mirroring `rebuild_daily_usage_in` exactly for the append
+/// path.
+fn upsert_daily_delta(transaction: &Transaction<'_>, record: &UsageRecord) -> Result<()> {
+    transaction.execute(
+        "INSERT INTO daily_usage_utc (
+            day, client, provider, model, input_tokens, output_tokens,
+            cache_read_tokens, cache_write_tokens, reasoning_tokens, event_count
+         )
+         VALUES (
+            date(?1 / 1000, 'unixepoch'), ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1
+         )
+         ON CONFLICT(day, client, provider, model) DO UPDATE SET
+            input_tokens = input_tokens + excluded.input_tokens,
+            output_tokens = output_tokens + excluded.output_tokens,
+            cache_read_tokens = cache_read_tokens + excluded.cache_read_tokens,
+            cache_write_tokens = cache_write_tokens + excluded.cache_write_tokens,
+            reasoning_tokens = reasoning_tokens + excluded.reasoning_tokens,
+            event_count = event_count + 1",
+        params![
+            record.event.occurred_at_unix_ms,
+            record.event.client,
+            record.event.provider.as_deref().unwrap_or(""),
+            record.event.model,
+            to_sql_integer(record.event.tokens.input, "input_tokens")?,
+            to_sql_integer(record.event.tokens.output, "output_tokens")?,
+            to_sql_integer(record.event.tokens.cache_read, "cache_read_tokens")?,
+            to_sql_integer(record.event.tokens.cache_write, "cache_write_tokens")?,
+            to_sql_integer(record.event.tokens.reasoning, "reasoning_tokens")?,
+        ],
+    )?;
+    Ok(())
+}
+
 fn to_sql_integer(value: u64, field: &'static str) -> Result<i64> {
     i64::try_from(value).map_err(|_| StorageError::IntegerOutOfRange { field })
 }
@@ -3031,6 +3071,44 @@ mod tests {
         database.rebuild_daily_usage().unwrap();
 
         assert_eq!(database.daily_usage_utc().unwrap(), expected);
+    }
+
+    #[test]
+    fn incremental_append_projections_match_a_full_rebuild() {
+        let mut database = registered_database();
+        database
+            .apply_ingest(ingest_request(
+                WriteMode::Append,
+                vec![
+                    record("event-a", 1_704_067_200_000, 10),
+                    record("event-b", 1_704_067_940_000, 30),
+                ],
+            ))
+            .unwrap();
+        database
+            .apply_ingest(ingest_request(
+                WriteMode::Append,
+                vec![record("event-c", 1_704_153_600_000, 20)],
+            ))
+            .unwrap();
+        // A duplicate must not move the projection.
+        database
+            .apply_ingest(ingest_request(
+                WriteMode::Append,
+                vec![record("event-a", 1_704_067_200_000, 10)],
+            ))
+            .unwrap();
+
+        let incremental = database.daily_usage_utc().unwrap();
+        assert_eq!(incremental.len(), 2);
+        assert_eq!(incremental[0].event_count, 2);
+        database.rebuild_daily_usage().unwrap();
+
+        assert_eq!(
+            database.daily_usage_utc().unwrap(),
+            incremental,
+            "the append path must project exactly what a rebuild computes"
+        );
     }
 
     #[test]
