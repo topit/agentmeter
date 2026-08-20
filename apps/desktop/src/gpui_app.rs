@@ -1625,73 +1625,194 @@ impl NavigationShell {
         } else {
             MessageKey::HealthHealthy
         };
+        let token_total = snapshot.tokens.checked_total().unwrap_or(0);
+        let token_rows = [
+            (
+                locale.text(MessageKey::ModelsInputTokens),
+                snapshot.tokens.input,
+                palette.series[0],
+            ),
+            (
+                locale.text(MessageKey::ModelsOutputTokens),
+                snapshot.tokens.output,
+                palette.series[1],
+            ),
+            (
+                locale.text(MessageKey::ModelsCacheReadTokens),
+                snapshot.tokens.cache_read,
+                palette.series[2],
+            ),
+            (
+                locale.text(MessageKey::ModelsCacheWriteTokens),
+                snapshot.tokens.cache_write,
+                palette.series[3],
+            ),
+            (
+                locale.text(MessageKey::ModelsReasoningTokens),
+                snapshot.tokens.reasoning,
+                palette.series[4],
+            ),
+        ];
 
         div()
             .mt_6()
             .flex()
             .flex_col()
-            .gap_4()
-            .child(
-                div()
-                    .p_4()
-                    .rounded_lg()
-                    .border_1()
-                    .border_color(rgb(palette.border))
-                    .bg(rgb(palette.surface))
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .child(locale.text(MessageKey::CollectionHealth)),
-                    )
-                    .child(
-                        div()
-                            .mt_1()
-                            .text_color(rgb(palette.muted_text))
-                            .child(locale.text(health_message)),
-                    ),
-            )
+            .gap_5()
             .child(
                 div()
                     .flex()
                     .flex_row()
-                    .gap_4()
-                    .child(metric_card(
+                    .gap_6()
+                    .pb_5()
+                    .border_b_1()
+                    .border_color(rgb(palette.border))
+                    .child(headline_metric(
                         locale.text(MessageKey::TotalTokens),
                         total_tokens,
                         palette,
                     ))
-                    .child(metric_card(
-                        locale.text(MessageKey::Sessions),
-                        locale.format_count(snapshot.session_count),
+                    .child(headline_metric(
+                        locale.text(MessageKey::ApiEquivalentCost),
+                        estimated_cost,
                         palette,
                     ))
-                    .child(metric_card(
-                        locale.text(MessageKey::ActiveDays),
-                        locale.format_count(snapshot.active_days),
+                    .child(headline_metric(
+                        locale.text(MessageKey::ProviderReportedCost),
+                        provider_cost,
                         palette,
                     )),
             )
+            .child(div().flex().flex_row().justify_between().children([
+                metadata_metric(
+                    locale.text(MessageKey::Sessions),
+                    locale.format_count(snapshot.session_count),
+                    palette,
+                ),
+                metadata_metric(
+                    locale.text(MessageKey::ActiveDays),
+                    locale.format_count(snapshot.active_days),
+                    palette,
+                ),
+                metadata_metric(
+                    locale.text(MessageKey::Models),
+                    locale.format_count(snapshot.model_count),
+                    palette,
+                ),
+                metadata_metric(
+                    locale.text(MessageKey::OverviewEvents),
+                    locale.format_count(snapshot.event_count),
+                    palette,
+                ),
+            ]))
             .child(
                 div()
                     .flex()
                     .flex_row()
                     .gap_4()
-                    .child(metric_card(
-                        locale.text(MessageKey::Models),
-                        locale.format_count(snapshot.model_count),
-                        palette,
-                    ))
-                    .child(metric_card(
-                        locale.text(MessageKey::ProviderReportedCost),
-                        provider_cost,
-                        palette,
-                    ))
-                    .child(metric_card(
-                        locale.text(MessageKey::ApiEquivalentCost),
-                        estimated_cost,
-                        palette,
-                    )),
+                    .child(
+                        div()
+                            .flex_1()
+                            .p_4()
+                            .rounded_lg()
+                            .border_1()
+                            .border_color(rgb(palette.border))
+                            .bg(rgb(palette.surface))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .child(locale.text(MessageKey::OverviewTokenComposition)),
+                            )
+                            .child(div().mt_4().flex().flex_col().gap_3().children(
+                                token_rows.into_iter().map(|(label, value, color)| {
+                                    token_composition_row(
+                                        label,
+                                        value,
+                                        token_total,
+                                        color,
+                                        locale,
+                                        palette,
+                                    )
+                                }),
+                            )),
+                    )
+                    .child(
+                        div()
+                            .w(px(220.0))
+                            .p_4()
+                            .rounded_lg()
+                            .border_1()
+                            .border_color(rgb(palette.border))
+                            .bg(rgb(palette.surface))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .child(locale.text(MessageKey::CollectionHealth)),
+                            )
+                            .child(
+                                div()
+                                    .mt_2()
+                                    .flex()
+                                    .flex_row()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(div().size(px(7.0)).rounded_full().bg(rgb(
+                                        if self.overview.load_state() == OverviewLoadState::Partial
+                                        {
+                                            palette.warning
+                                        } else {
+                                            palette.success
+                                        },
+                                    )))
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(rgb(palette.muted_text))
+                                            .child(locale.text(health_message)),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .mt_5()
+                                    .text_sm()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .child(locale.text(MessageKey::OverviewUsageQuality)),
+                            )
+                            .child(div().mt_2().flex().flex_col().gap_2().children([
+                                quality_row(
+                                    locale.text(MessageKey::ConfidenceExact),
+                                    snapshot.data_quality.exact_events,
+                                    locale,
+                                    palette,
+                                ),
+                                quality_row(
+                                    locale.text(MessageKey::ConfidenceDerived),
+                                    snapshot.data_quality.derived_events,
+                                    locale,
+                                    palette,
+                                ),
+                                quality_row(
+                                    locale.text(MessageKey::ConfidenceEstimated),
+                                    snapshot.data_quality.estimated_events,
+                                    locale,
+                                    palette,
+                                ),
+                                quality_row(
+                                    locale.text(MessageKey::PricingUnpricedEvents),
+                                    snapshot.data_quality.unpriced_events,
+                                    locale,
+                                    palette,
+                                ),
+                                quality_row(
+                                    locale.text(MessageKey::OverviewSources),
+                                    snapshot.source_health.sources.len() as u64,
+                                    locale,
+                                    palette,
+                                ),
+                            ])),
+                    ),
             )
     }
 }
@@ -1812,28 +1933,98 @@ impl Render for NavigationShell {
     }
 }
 
-fn metric_card(label: &'static str, value: String, palette: ThemePalette) -> impl IntoElement {
+fn headline_metric(label: &'static str, value: String, palette: ThemePalette) -> impl IntoElement {
     div()
         .flex_1()
-        .min_w(px(160.0))
-        .p_4()
-        .rounded_lg()
-        .border_1()
-        .border_color(rgb(palette.border))
-        .bg(rgb(palette.surface))
         .child(
             div()
-                .text_sm()
-                .text_color(rgb(palette.muted_text))
+                .text_xs()
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(rgb(palette.subtle_text))
                 .child(label),
         )
         .child(
             div()
                 .mt_2()
-                .text_xl()
+                .text_2xl()
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .child(value),
         )
+}
+
+fn metadata_metric(label: &'static str, value: String, palette: ThemePalette) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_row()
+        .items_baseline()
+        .gap_2()
+        .child(div().font_weight(gpui::FontWeight::SEMIBOLD).child(value))
+        .child(
+            div()
+                .text_xs()
+                .text_color(rgb(palette.muted_text))
+                .child(label),
+        )
+}
+
+fn token_composition_row(
+    label: &'static str,
+    value: u64,
+    total: u64,
+    color: u32,
+    locale: Locale,
+    palette: ThemePalette,
+) -> impl IntoElement {
+    let width = if total == 0 {
+        0.0
+    } else {
+        ((value as f64 / total as f64) * 260.0).max(if value == 0 { 0.0 } else { 2.0 })
+    };
+    div()
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .justify_between()
+                .text_xs()
+                .child(label)
+                .child(
+                    div()
+                        .text_color(rgb(palette.muted_text))
+                        .child(locale.format_count(value)),
+                ),
+        )
+        .child(
+            div()
+                .mt_1()
+                .h(px(4.0))
+                .w_full()
+                .rounded_full()
+                .bg(rgb(palette.selected))
+                .child(
+                    div()
+                        .h_full()
+                        .w(px(width as f32))
+                        .rounded_full()
+                        .bg(rgb(color)),
+                ),
+        )
+}
+
+fn quality_row(
+    label: &'static str,
+    value: u64,
+    locale: Locale,
+    palette: ThemePalette,
+) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_row()
+        .justify_between()
+        .text_xs()
+        .text_color(rgb(palette.muted_text))
+        .child(label)
+        .child(locale.format_count(value))
 }
 
 fn activity_option(

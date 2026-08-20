@@ -37,6 +37,10 @@ impl Locale {
             (Self::En, MessageKey::OverviewPartial) => {
                 "Some sources need attention. Totals include the data currently available."
             }
+            (Self::En, MessageKey::OverviewTokenComposition) => "Token composition",
+            (Self::En, MessageKey::OverviewUsageQuality) => "Usage quality",
+            (Self::En, MessageKey::OverviewEvents) => "Events",
+            (Self::En, MessageKey::OverviewSources) => "Sources",
             (Self::En, MessageKey::OverviewErrorTitle) => "Overview unavailable",
             (Self::En, MessageKey::OverviewDataDirectoryError) => {
                 "AgentMeter could not prepare its local data folder."
@@ -220,6 +224,10 @@ impl Locale {
             (Self::ZhCn, MessageKey::OverviewPartial) => {
                 "部分数据源需要处理。当前总计仅包含已有数据。"
             }
+            (Self::ZhCn, MessageKey::OverviewTokenComposition) => "Token 构成",
+            (Self::ZhCn, MessageKey::OverviewUsageQuality) => "用量质量",
+            (Self::ZhCn, MessageKey::OverviewEvents) => "事件",
+            (Self::ZhCn, MessageKey::OverviewSources) => "数据源",
             (Self::ZhCn, MessageKey::OverviewErrorTitle) => "概览暂不可用",
             (Self::ZhCn, MessageKey::OverviewDataDirectoryError) => {
                 "AgentMeter 无法准备本地数据文件夹。"
@@ -453,6 +461,10 @@ pub enum MessageKey {
     OverviewEmptyTitle,
     OverviewEmptyBody,
     OverviewPartial,
+    OverviewTokenComposition,
+    OverviewUsageQuality,
+    OverviewEvents,
+    OverviewSources,
     OverviewErrorTitle,
     OverviewDataDirectoryError,
     OverviewDatabaseError,
@@ -738,6 +750,10 @@ mod tests {
             MessageKey::OverviewEmptyTitle,
             MessageKey::OverviewEmptyBody,
             MessageKey::OverviewPartial,
+            MessageKey::OverviewTokenComposition,
+            MessageKey::OverviewUsageQuality,
+            MessageKey::OverviewEvents,
+            MessageKey::OverviewSources,
             MessageKey::OverviewErrorTitle,
             MessageKey::OverviewDataDirectoryError,
             MessageKey::OverviewDatabaseError,
