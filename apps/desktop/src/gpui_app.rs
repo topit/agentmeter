@@ -1621,7 +1621,7 @@ impl NavigationShell {
             .map(|value| locale.format_usd(value))
             .unwrap_or_else(|| locale.text(MessageKey::NotAvailable).to_owned());
         let health_message = if self.overview.load_state() == OverviewLoadState::Partial {
-            MessageKey::OverviewPartial
+            MessageKey::HealthPartial
         } else {
             MessageKey::HealthHealthy
         };

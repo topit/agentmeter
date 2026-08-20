@@ -66,7 +66,7 @@ Every commit must include the corresponding update to this file: task status, de
 | M5-05 First-run progress experience | coordinator | `378c907` | real first-run validation | pushed | progress reporting tests; collecting-state tests; workspace checks | committed and pushed as `a61be6c` (+ evidence `0519819`); CI green; DMG re-cut by release run `32370110427`; single-instance fresh scan verified at ~35 s / 74,736 events |
 | M5-06 Privacy review and README | coordinator | `a61be6c` | docs/PLAN.md section 13 rules | pushed | privacy-pattern scan; README refresh; workspace checks | committed and pushed as `4022937`; CI run `32373117541` green |
 | M5-07 Visual foundation and shell | coordinator | `4022937` | reviewed Waku/Tokens UI references | pushed | locale/theme tests; workspace checks; reviewed visual matrix | committed and pushed as `8c8385b`; CI run `32376545700` green; English-light and Chinese-dark shell screenshots reviewed without clipping or layout regressions |
-| M5-08 Overview visual hierarchy | coordinator | `8c8385b` | M5-07 semantic shell | completed locally; hosted visual review pending | overview state tests; workspace checks; reviewed visual matrix | open headline metrics, compact lifetime facts, token composition, collection health, and data quality implemented; next reconcile the commit and review populated locale/theme screenshots |
+| M5-08 Overview visual hierarchy | coordinator | `8c8385b` | M5-07 semantic shell | follow-up in progress | overview state tests; workspace checks; reviewed visual matrix | initial commit `940f60e` and CI run `32378255163` are green; populated screenshots found the full partial-data sentence clipped in the narrow health panel, so the follow-up uses the localized short status there |
 
 ## Verification contract
 
@@ -393,6 +393,7 @@ Every commit must include the corresponding update to this file: task status, de
 - The lower dashboard uses containment only where it explains structure: a five-bucket token-composition panel with labeled colored bars, plus a collection-health and usage-quality panel showing exact/derived/estimated/unpriced facts and monitored-source count. Unknown costs remain visibly unavailable and unpriced events remain explicit.
 - The hosted visual matrix now seeds Overview with synthetic sessions, events, confidence levels, both cost kinds, and an unpriced event, then removes the synthetic source after each capture. This replaces the prior empty-only Overview screenshots without reading local Agent histories.
 - Every new label ships in English and Simplified Chinese and is included in the Overview localization coverage. Orb verification passed: `cargo fmt --all --check`, `cargo check --workspace --all-targets`, `cargo test --workspace` (155 passed, one explicit performance test ignored), `cargo clippy --workspace --all-targets -- -D warnings`, and `git diff --check`. Production-feature GPUI compilation and populated visual review run after push.
+- CI run `32378255163` passed both jobs and produced populated Overview shots. Review found one presentation regression in both locales: the full partial-data explanation clipped inside the fixed 220px health panel. The follow-up retains the actionable full details on Sources and renders the existing localized `Partial data` / `部分数据` status in the compact panel.
 
 ## Development handoff
 
