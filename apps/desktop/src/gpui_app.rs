@@ -398,13 +398,17 @@ impl NavigationShell {
             .aria_label(label)
             .w_full()
             .px_3()
-            .py_2()
+            .h(px(36.0))
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_2()
             .rounded_md()
             .border_1()
             .border_color(rgb(if selected {
-                palette.accent
+                palette.border
             } else {
-                palette.surface
+                palette.sidebar
             }))
             .cursor_pointer()
             .focus_visible(move |style| style.border_2().border_color(rgb(palette.focus_ring)))
@@ -412,14 +416,44 @@ impl NavigationShell {
                 this.state.select(route);
                 cx.notify();
             }))
-            .child(label);
+            .child(
+                div()
+                    .w(px(3.0))
+                    .h(px(14.0))
+                    .rounded_sm()
+                    .bg(rgb(if selected {
+                        palette.accent
+                    } else {
+                        palette.sidebar
+                    })),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(if selected {
+                        gpui::FontWeight::SEMIBOLD
+                    } else {
+                        gpui::FontWeight::NORMAL
+                    })
+                    .child(label),
+            );
         if selected {
-            item.bg(rgb(palette.accent))
-                .text_color(rgb(palette.accent_text))
+            item.bg(rgb(palette.selected)).text_color(rgb(palette.text))
         } else {
             item.text_color(rgb(palette.text))
                 .hover(move |style| style.bg(rgb(palette.hover)))
         }
+    }
+
+    fn nav_group_label(&self, key: MessageKey, palette: ThemePalette) -> impl IntoElement + use<> {
+        div()
+            .mt_3()
+            .mb_1()
+            .px_3()
+            .text_xs()
+            .font_weight(gpui::FontWeight::SEMIBOLD)
+            .text_color(rgb(palette.subtle_text))
+            .child(self.state.locale().text(key))
     }
 
     fn overview_content(&self, palette: ThemePalette) -> AnyElement {
@@ -1675,34 +1709,66 @@ impl Render for NavigationShell {
             .text_color(rgb(palette.text))
             .child(
                 div()
-                    .w(px(232.0))
+                    .w(px(216.0))
                     .h_full()
                     .flex()
                     .flex_col()
-                    .gap_2()
+                    .gap_1()
                     .p_4()
-                    .bg(rgb(palette.surface))
+                    .bg(rgb(palette.sidebar))
                     .border_r_1()
                     .border_color(rgb(palette.border))
                     .child(
                         div()
-                            .pb_3()
+                            .pb_4()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap_3()
                             .child(
                                 div()
-                                    .text_xl()
+                                    .size(px(32.0))
+                                    .rounded_lg()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .bg(rgb(palette.accent))
+                                    .text_color(rgb(palette.accent_text))
                                     .font_weight(gpui::FontWeight::SEMIBOLD)
-                                    .child("AgentMeter"),
+                                    .child("A"),
                             )
                             .child(
                                 div()
-                                    .mt_1()
-                                    .text_sm()
-                                    .text_color(rgb(palette.muted_text))
-                                    .child(locale.text(MessageKey::AppSubtitle)),
+                                    .child(
+                                        div()
+                                            .text_base()
+                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .child("AgentMeter"),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(rgb(palette.muted_text))
+                                            .child(locale.text(MessageKey::AppSubtitle)),
+                                    ),
                             ),
                     )
+                    .child(self.nav_group_label(MessageKey::NavUsage, palette))
                     .children(
-                        Route::ALL
+                        [Route::Overview, Route::Activity, Route::Sessions]
+                            .into_iter()
+                            .map(|route| self.nav_item(route, palette, cx)),
+                    )
+                    .child(self.nav_group_label(MessageKey::NavInsights, palette))
+                    .children(
+                        [Route::Models, Route::Pricing]
+                            .into_iter()
+                            .map(|route| self.nav_item(route, palette, cx)),
+                    )
+                    .child(div().flex_1())
+                    .child(self.nav_group_label(MessageKey::NavSystem, palette))
+                    .children(
+                        [Route::Sources, Route::Settings]
                             .into_iter()
                             .map(|route| self.nav_item(route, palette, cx)),
                     ),
@@ -1733,10 +1799,11 @@ impl Render for NavigationShell {
                 div()
                     .flex_1()
                     .h_full()
-                    .p_8()
+                    .px_8()
+                    .py_6()
                     .child(
                         div()
-                            .text_2xl()
+                            .text_xl()
                             .font_weight(gpui::FontWeight::SEMIBOLD)
                             .child(self.state.label(selected)),
                     )

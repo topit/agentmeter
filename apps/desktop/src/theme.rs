@@ -26,14 +26,17 @@ impl ResolvedTheme {
     pub fn palette(self) -> ThemePalette {
         match self {
             Self::Light => ThemePalette {
-                background: 0xf7f7f8,
+                background: 0xf5f5f3,
+                sidebar: 0xeeeeeb,
                 surface: 0xffffff,
-                text: 0x202124,
-                muted_text: 0x6f737b,
-                border: 0xdfe1e5,
-                accent: 0x1677d2,
+                text: 0x222220,
+                muted_text: 0x71716c,
+                subtle_text: 0x969690,
+                border: 0xdededa,
+                selected: 0xdededa,
+                accent: 0x1478d4,
                 accent_text: 0xffffff,
-                hover: 0xebf3fb,
+                hover: 0xe5e5e1,
                 focus_ring: 0x0b6fc2,
                 success: 0x1a7f37,
                 warning: 0x9a6700,
@@ -42,14 +45,17 @@ impl ResolvedTheme {
                 series: [0x1677d2, 0x1a7f37, 0x9a6700, 0x8250df, 0xcf222e, 0x0f766e],
             },
             Self::Dark => ThemePalette {
-                background: 0x151617,
-                surface: 0x1f2022,
-                text: 0xf2f3f5,
-                muted_text: 0xa7abb3,
-                border: 0x34363a,
+                background: 0x1b1b1a,
+                sidebar: 0x222221,
+                surface: 0x252524,
+                text: 0xf2f2ef,
+                muted_text: 0xadada7,
+                subtle_text: 0x7f7f7a,
+                border: 0x3a3a38,
+                selected: 0x383836,
                 accent: 0x57a8f5,
                 accent_text: 0x0d2235,
-                hover: 0x293847,
+                hover: 0x30302e,
                 focus_ring: 0x86c5ff,
                 success: 0x3fb950,
                 warning: 0xd29922,
@@ -66,10 +72,13 @@ impl ResolvedTheme {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ThemePalette {
     pub background: u32,
+    pub sidebar: u32,
     pub surface: u32,
     pub text: u32,
     pub muted_text: u32,
+    pub subtle_text: u32,
     pub border: u32,
+    pub selected: u32,
     pub accent: u32,
     pub accent_text: u32,
     pub hover: u32,
@@ -103,6 +112,9 @@ mod tests {
             ResolvedTheme::Light.palette(),
             ResolvedTheme::Dark.palette(),
         ] {
+            assert_ne!(palette.sidebar, palette.background);
+            assert_ne!(palette.selected, palette.sidebar);
+            assert_ne!(palette.subtle_text, palette.sidebar);
             let status_colors = [
                 palette.success,
                 palette.warning,

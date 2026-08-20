@@ -454,6 +454,7 @@ Exit: five complete collectors (DeepSeek Harness moved to v1.1), visible pricing
 - signing, notarization, DMG/Homebrew packaging;
 - launch behavior, permissions, diagnostics, crash recovery;
 - privacy review and user documentation.
+- native visual refinement: a restrained semantic surface scale, compact grouped sidebar, stronger analytical hierarchy, and consistent content panels across both themes and locales.
 
 Exit: representative large histories refresh incrementally, cold rebuild is bounded and cancellable, and beta package passes clean-machine testing.
 
@@ -509,4 +510,4 @@ These decisions do not block M1 but should be settled before macOS beta:
 
 ## 19. Immediate next implementation step
 
-M5-06 completed the privacy review (repository scan clean, metadata-only guarantees documented) and rewrote the README for the real product. M5 implementation is done; what remains before the v0.1.0 tag is external-input dependent: the user's re-test of the progress DMG, codesign/notarytool once the Developer ID certificate is configured as repository secrets, the pre-packaging interactive accessibility pass after the local Metal Toolchain repair, and an M5 exit review that settles open decisions 2 (dock-only for 1.0), 3 (both cost kinds shown separately, already implemented), 6 (manual DMG download for the beta), and 7 (no telemetry, already implemented).
+M5-06 completed the privacy review and README. Product review then identified a visual-completion gap: the feature-complete desktop still reads as an engineering prototype beside the original Waku and Tokens references. M5-07 therefore modernizes the semantic palette and native application shell first, followed by the Overview analytical hierarchy and a bounded consistency pass across the remaining pages. These are presentation-only changes: collection, immutable query snapshots, pricing semantics, privacy, i18n, accessibility, and theme contracts remain unchanged. Signing/notarization and the interactive accessibility pass remain external-input dependent.

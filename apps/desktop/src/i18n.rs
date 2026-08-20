@@ -23,6 +23,9 @@ impl Locale {
     pub fn text(self, key: MessageKey) -> &'static str {
         match (self, key) {
             (Self::En, MessageKey::AppSubtitle) => "Local agent usage",
+            (Self::En, MessageKey::NavUsage) => "USAGE",
+            (Self::En, MessageKey::NavInsights) => "INSIGHTS",
+            (Self::En, MessageKey::NavSystem) => "SYSTEM",
             (Self::En, MessageKey::ShellPlaceholder) => {
                 "Usage views will appear here as local snapshots become available."
             }
@@ -203,6 +206,9 @@ impl Locale {
             }
             (Self::En, MessageKey::PricingReasoningRate) => "Reasoning",
             (Self::ZhCn, MessageKey::AppSubtitle) => "本地 Agent 用量",
+            (Self::ZhCn, MessageKey::NavUsage) => "用量",
+            (Self::ZhCn, MessageKey::NavInsights) => "分析",
+            (Self::ZhCn, MessageKey::NavSystem) => "系统",
             (Self::ZhCn, MessageKey::ShellPlaceholder) => {
                 "本地数据快照可用后，用量视图将在这里显示。"
             }
@@ -439,6 +445,9 @@ impl Locale {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MessageKey {
     AppSubtitle,
+    NavUsage,
+    NavInsights,
+    NavSystem,
     ShellPlaceholder,
     OverviewLoading,
     OverviewEmptyTitle,
@@ -689,6 +698,19 @@ mod tests {
     #[test]
     fn translates_chinese_navigation() {
         assert_eq!(Locale::ZhCn.text(MessageKey::Sources), "数据源");
+    }
+
+    #[test]
+    fn localizes_navigation_groups() {
+        for key in [
+            MessageKey::NavUsage,
+            MessageKey::NavInsights,
+            MessageKey::NavSystem,
+        ] {
+            assert!(!Locale::En.text(key).is_empty());
+            assert!(!Locale::ZhCn.text(key).is_empty());
+            assert_ne!(Locale::En.text(key), Locale::ZhCn.text(key));
+        }
     }
 
     #[test]

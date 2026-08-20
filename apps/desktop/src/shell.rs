@@ -17,9 +17,9 @@ impl Route {
         Self::Overview,
         Self::Activity,
         Self::Sessions,
-        Self::Sources,
         Self::Models,
         Self::Pricing,
+        Self::Sources,
         Self::Settings,
     ];
 
