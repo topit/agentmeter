@@ -740,6 +740,9 @@ struct LocalAdapter {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct IngestionSummary {
     pub runs: Vec<AdapterRunSummary>,
+    /// True when the scan stopped early; every started source either fully
+    /// committed or never ran, so a later scan resumes cleanly.
+    pub cancelled: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -752,6 +755,26 @@ pub struct AdapterRunSummary {
     /// Discovery-level failure; without discovered sources there is no
     /// registered object to persist it against, so it stays in the summary.
     pub discovery_error: Option<String>,
+}
+
+/// Cooperative cancellation for long collection passes. Cancellation is
+/// checked between source-owned transactions, so abandoning a scan never
+/// corrupts a checkpoint or half-applies a source.
+#[derive(Clone, Debug, Default)]
+pub struct CancellationToken(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+impl CancellationToken {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn cancel(&self) {
+        self.0.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(std::sync::atomic::Ordering::Relaxed)
+    }
 }
 
 /// The default scan interval for periodic full reconciliation.
@@ -796,11 +819,37 @@ impl IngestionService {
         &self,
         observed_at_unix_ms: i64,
     ) -> Result<IngestionSummary, LocalDataServiceError> {
+        self.scan_and_ingest_cancellable(observed_at_unix_ms, &CancellationToken::new())
+    }
+
+    /// Runs the collection pass, checking `token` between source-owned
+    /// transactions. A cancelled scan returns the partial summary with
+    /// `cancelled` set instead of an error.
+    pub fn scan_and_ingest_cancellable(
+        &self,
+        observed_at_unix_ms: i64,
+        token: &CancellationToken,
+    ) -> Result<IngestionSummary, LocalDataServiceError> {
+        self.scan_with(observed_at_unix_ms, token, || false)
+    }
+
+    fn scan_with(
+        &self,
+        observed_at_unix_ms: i64,
+        token: &CancellationToken,
+        mut extra_cancel_check: impl FnMut() -> bool,
+    ) -> Result<IngestionSummary, LocalDataServiceError> {
+        let is_cancelled = |extra: &mut dyn FnMut() -> bool| token.is_cancelled() || extra();
         let mut database = open_local_database(&local_database_path(&self.data_directory))?;
         let mut runs = Vec::new();
         let mut candidates: BTreeMap<String, (usize, SourceCandidate)> = BTreeMap::new();
+        let mut cancelled = false;
 
-        for (index, local) in self.adapters.iter().enumerate() {
+        'adapters: for (index, local) in self.adapters.iter().enumerate() {
+            if is_cancelled(&mut extra_cancel_check) {
+                cancelled = true;
+                break;
+            }
             let mut run = AdapterRunSummary {
                 adapter_id: local.adapter.id().to_owned(),
                 discovered_sources: 0,
@@ -819,6 +868,11 @@ impl IngestionService {
             };
             run.discovered_sources = discovered.len() as u64;
             for candidate in discovered {
+                if is_cancelled(&mut extra_cancel_check) {
+                    cancelled = true;
+                    runs.push(run);
+                    break 'adapters;
+                }
                 let source_object_id = format!("{}:{}", local.adapter.id(), candidate.source_key);
                 candidates.insert(source_object_id.clone(), (index, candidate.clone()));
                 if let Err(error) =
@@ -875,10 +929,16 @@ impl IngestionService {
 
         // Periodic full reconciliation: due sources rebuild through the
         // adapter that still owns them.
-        if let Ok(due) =
-            database.sources_due_for_reconciliation(observed_at_unix_ms, RECONCILIATION_INTERVAL_MS)
+        if !cancelled
+            && !is_cancelled(&mut extra_cancel_check)
+            && let Ok(due) = database
+                .sources_due_for_reconciliation(observed_at_unix_ms, RECONCILIATION_INTERVAL_MS)
         {
             for target in due {
+                if is_cancelled(&mut extra_cancel_check) {
+                    cancelled = true;
+                    break;
+                }
                 let Some((index, candidate)) = candidates.get(&target.source_object_id) else {
                     continue;
                 };
@@ -899,7 +959,7 @@ impl IngestionService {
             }
         }
 
-        Ok(IngestionSummary { runs })
+        Ok(IngestionSummary { runs, cancelled })
     }
 }
 
@@ -1258,8 +1318,8 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        ActivityDimension, ActivityGranularity, ActivityService, ExportFormat, ExportService,
-        IngestionService, LocalDataErrorKind, ModelsPricingService, OverviewService,
+        ActivityDimension, ActivityGranularity, ActivityService, CancellationToken, ExportFormat,
+        ExportService, IngestionService, LocalDataErrorKind, ModelsPricingService, OverviewService,
         PreferencesService, PricingService, SessionsService, SourcesService,
     };
     use agentmeter_collectors::{codex::CodexJsonlAdapter, kimi::KimiWireAdapter};
@@ -1950,6 +2010,122 @@ mod tests {
             3,
             "appended Kimi usage resumes from the checkpoint"
         );
+    }
+
+    #[test]
+    fn cancelled_scans_commit_whole_sources_and_resume_cleanly() {
+        let data_directory = tempdir().unwrap();
+        let kimi_root = tempdir().unwrap();
+        write_kimi_usage(
+            kimi_root.path(),
+            "aa000000-0000-4000-8000-00000000000a",
+            1_782_113_000_000,
+        );
+        write_kimi_usage(
+            kimi_root.path(),
+            "bb000000-0000-4000-8000-00000000000b",
+            1_782_114_000_000,
+        );
+
+        let service = IngestionService::with_adapters(
+            data_directory.path(),
+            vec![(
+                kimi_root.path().to_owned(),
+                Box::new(KimiWireAdapter::new(kimi_root.path())),
+            )],
+        );
+
+        // Cancel at the third cancellation check: the adapter check and the
+        // first source pass, the second source never starts.
+        let mut checks = 0_u32;
+        let partial = service
+            .scan_with(1_787_011_200_000, &CancellationToken::new(), || {
+                checks += 1;
+                checks >= 3
+            })
+            .unwrap();
+
+        assert!(partial.cancelled);
+        assert_eq!(partial.runs[0].discovered_sources, 2);
+        assert_eq!(partial.runs[0].ingested_sources, 1);
+        let database_path = data_directory.path().join("AgentMeter/agentmeter.db");
+        assert_eq!(
+            Database::open(&database_path)
+                .unwrap()
+                .overview_snapshot()
+                .unwrap()
+                .event_count,
+            1,
+            "the completed source stays committed"
+        );
+
+        // A later uncancellable scan resumes and finishes the rest.
+        let completed = service.scan_and_ingest(1_787_011_300_000).unwrap();
+        assert!(!completed.cancelled);
+        assert_eq!(completed.runs[0].ingested_sources, 2);
+        assert_eq!(
+            Database::open(&database_path)
+                .unwrap()
+                .overview_snapshot()
+                .unwrap()
+                .event_count,
+            2,
+            "the skipped source ingests exactly once on the resumed scan"
+        );
+    }
+
+    #[test]
+    fn pre_cancelled_scans_do_nothing() {
+        let data_directory = tempdir().unwrap();
+        let kimi_root = tempdir().unwrap();
+        write_kimi_usage(
+            kimi_root.path(),
+            "aa000000-0000-4000-8000-00000000000a",
+            1_782_113_000_000,
+        );
+
+        let service = IngestionService::with_adapters(
+            data_directory.path(),
+            vec![(
+                kimi_root.path().to_owned(),
+                Box::new(KimiWireAdapter::new(kimi_root.path())),
+            )],
+        );
+        let token = CancellationToken::new();
+        token.cancel();
+
+        let summary = service
+            .scan_and_ingest_cancellable(1_787_011_200_000, &token)
+            .unwrap();
+
+        assert!(summary.cancelled);
+        assert!(summary.runs.is_empty());
+        assert_eq!(
+            Database::open(data_directory.path().join("AgentMeter/agentmeter.db"))
+                .unwrap()
+                .overview_snapshot()
+                .unwrap()
+                .event_count,
+            0
+        );
+    }
+
+    /// One Kimi agent journal holding a single usage delta.
+    fn write_kimi_usage(root: &std::path::Path, session: &str, time: u64) {
+        let directory = root
+            .join("sessions")
+            .join(format!("wd_{session}"))
+            .join(format!("session_{session}"))
+            .join("agents")
+            .join("main");
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(
+            directory.join("wire.jsonl"),
+            format!(
+                "{{\"type\":\"metadata\",\"protocol_version\":\"1.5\"}}\n{{\"type\":\"usage.record\",\"model\":\"kimi-code/kimi-for-coding\",\"usage\":{{\"inputOther\":100,\"output\":20,\"inputCacheRead\":0,\"inputCacheCreation\":0}},\"usageScope\":\"turn\",\"time\":{time}}}\n"
+            ),
+        )
+        .unwrap();
     }
 
     #[test]

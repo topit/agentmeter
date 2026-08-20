@@ -9,8 +9,8 @@ use agentmeter_core::{
 };
 use agentmeter_desktop::{
     ActivityDimension, ActivityGranularity, ActivityLoadState, ActivityMetric, ActivityService,
-    ActivityState, ExportFormat, ExportService, ExportState, IngestionService, IngestionUiState,
-    LocalDataErrorKind, Locale, MessageKey, ModelCard, ModelsPricingLoadState,
+    ActivityState, CancellationToken, ExportFormat, ExportService, ExportState, IngestionService,
+    IngestionUiState, LocalDataErrorKind, Locale, MessageKey, ModelCard, ModelsPricingLoadState,
     ModelsPricingService, ModelsPricingState, OverviewLoadState, OverviewService, OverviewState,
     PreferencesService, RateCard, Route, SessionCard, SessionsLoadState, SessionsService,
     SessionsState, SettingsLoadState, SettingsState, ShellState, SourceCard, SourcesLoadState,
@@ -51,6 +51,7 @@ struct NavigationShell {
     settings: SettingsState,
     export: ExportState,
     ingestion: IngestionUiState,
+    ingestion_token: CancellationToken,
     system_locale: Locale,
 }
 
@@ -86,6 +87,7 @@ impl NavigationShell {
             settings: SettingsState::default(),
             export: ExportState::default(),
             ingestion: IngestionUiState::default(),
+            ingestion_token: CancellationToken::new(),
             system_locale: locale,
         };
         shell.reload_all_snapshots(cx);
@@ -288,11 +290,14 @@ impl NavigationShell {
     /// background executor, then refreshes every view snapshot. Single-use
     /// generations reject overlapping runs.
     fn run_ingestion(&mut self, cx: &mut Context<Self>) {
+        self.ingestion_token.cancel();
+        let token = CancellationToken::new();
+        self.ingestion_token = token.clone();
         let request = self.ingestion.begin_scan();
         let scan = cx.background_executor().spawn(async move {
             let data_directory = macos_data_directory()?;
             IngestionService::with_default_local_adapters(data_directory)
-                .scan_and_ingest(current_unix_ms())
+                .scan_and_ingest_cancellable(current_unix_ms(), &token)
                 .map_err(|error| error.kind())
         });
         cx.spawn(async move |this, cx| {
@@ -306,6 +311,12 @@ impl NavigationShell {
             .ok();
         })
         .detach();
+    }
+
+    /// Requests cooperative cancellation of the running scan; committed
+    /// sources stay committed and a later rescan resumes cleanly.
+    fn cancel_ingestion(&mut self) {
+        self.ingestion_token.cancel();
     }
 
     /// Persists the complete preference snapshot off the render path. The
@@ -1141,26 +1152,43 @@ impl NavigationShell {
                     .flex()
                     .flex_col()
                     .gap_4()
-                    .child(div().flex().flex_row().items_center().gap_3().child(
-                        if self.ingestion.running() {
-                            div()
-                                .text_sm()
-                                .text_color(rgb(palette.muted_text))
-                                .child(locale.text(MessageKey::SourcesRescanning))
-                                .into_any_element()
-                        } else {
-                            option_control(
-                                "sources-rescan",
-                                locale.text(MessageKey::SourcesRescan),
-                                false,
-                                palette,
-                                move |this, _, _, cx| {
-                                    this.run_ingestion(cx);
-                                },
-                                cx,
-                            )
-                        },
-                    ))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap_3()
+                            .child(if self.ingestion.running() {
+                                div()
+                                    .text_sm()
+                                    .text_color(rgb(palette.muted_text))
+                                    .child(locale.text(MessageKey::SourcesRescanning))
+                                    .into_any_element()
+                            } else {
+                                option_control(
+                                    "sources-rescan",
+                                    locale.text(MessageKey::SourcesRescan),
+                                    false,
+                                    palette,
+                                    move |this, _, _, cx| {
+                                        this.run_ingestion(cx);
+                                    },
+                                    cx,
+                                )
+                            })
+                            .children(self.ingestion.running().then(|| {
+                                option_control(
+                                    "sources-cancel-scan",
+                                    locale.text(MessageKey::SourcesCancelScan),
+                                    false,
+                                    palette,
+                                    move |this, _, _, _| {
+                                        this.cancel_ingestion();
+                                    },
+                                    cx,
+                                )
+                            })),
+                    )
                     .children(snapshot.sources.iter().map(|health| {
                         source_card(SourceCard::from_health(health, locale), locale, palette)
                     }));
@@ -1170,6 +1198,13 @@ impl NavigationShell {
                             .text_sm()
                             .text_color(rgb(palette.danger))
                             .child(locale.text(MessageKey::SourcesScanError)),
+                    );
+                } else if self.ingestion.cancelled() {
+                    content = content.child(
+                        div()
+                            .text_sm()
+                            .text_color(rgb(palette.muted_text))
+                            .child(locale.text(MessageKey::SourcesScanCancelled)),
                     );
                 }
                 content.into_any_element()

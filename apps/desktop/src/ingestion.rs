@@ -10,6 +10,7 @@ pub struct IngestionRequest(u64);
 pub struct IngestionUiState {
     latest_request: u64,
     running: bool,
+    cancelled: bool,
     last_summary: Option<IngestionSummary>,
     error: Option<LocalDataErrorKind>,
 }
@@ -21,6 +22,7 @@ impl IngestionUiState {
             .checked_add(1)
             .expect("ingestion request generation overflowed");
         self.running = true;
+        self.cancelled = false;
         self.error = None;
         IngestionRequest(self.latest_request)
     }
@@ -36,6 +38,7 @@ impl IngestionUiState {
         self.running = false;
         match result {
             Ok(summary) => {
+                self.cancelled = summary.cancelled;
                 self.last_summary = Some(summary);
                 self.error = None;
             }
@@ -46,6 +49,10 @@ impl IngestionUiState {
 
     pub const fn running(&self) -> bool {
         self.running
+    }
+
+    pub const fn cancelled(&self) -> bool {
+        self.cancelled
     }
 
     pub const fn error(&self) -> Option<LocalDataErrorKind> {
@@ -73,6 +80,7 @@ mod tests {
                 reconciled_sources: 0,
                 discovery_error: None,
             }],
+            cancelled: false,
         }
     }
 

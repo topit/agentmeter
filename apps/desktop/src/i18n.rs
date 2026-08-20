@@ -191,6 +191,8 @@ impl Locale {
             (Self::En, MessageKey::SourcesRescan) => "Rescan sources",
             (Self::En, MessageKey::SourcesRescanning) => "Scanning local sources…",
             (Self::En, MessageKey::SourcesScanError) => "AgentMeter could not scan local sources.",
+            (Self::En, MessageKey::SourcesCancelScan) => "Cancel scan",
+            (Self::En, MessageKey::SourcesScanCancelled) => "Scan cancelled.",
             (Self::En, MessageKey::PricingReasoningRate) => "Reasoning",
             (Self::ZhCn, MessageKey::AppSubtitle) => "本地 Agent 用量",
             (Self::ZhCn, MessageKey::ShellPlaceholder) => {
@@ -355,6 +357,8 @@ impl Locale {
             (Self::ZhCn, MessageKey::SourcesRescan) => "重新扫描数据源",
             (Self::ZhCn, MessageKey::SourcesRescanning) => "正在扫描本地数据源…",
             (Self::ZhCn, MessageKey::SourcesScanError) => "AgentMeter 无法扫描本地数据源。",
+            (Self::ZhCn, MessageKey::SourcesCancelScan) => "取消扫描",
+            (Self::ZhCn, MessageKey::SourcesScanCancelled) => "扫描已取消。",
             (Self::ZhCn, MessageKey::PricingReasoningRate) => "推理",
         }
     }
@@ -560,6 +564,8 @@ pub enum MessageKey {
     SourcesRescan,
     SourcesRescanning,
     SourcesScanError,
+    SourcesCancelScan,
+    SourcesScanCancelled,
 }
 
 pub const fn confidence_key(confidence: DataConfidence) -> MessageKey {
@@ -891,6 +897,8 @@ mod tests {
             MessageKey::SourcesRescan,
             MessageKey::SourcesRescanning,
             MessageKey::SourcesScanError,
+            MessageKey::SourcesCancelScan,
+            MessageKey::SourcesScanCancelled,
         ] {
             assert!(!Locale::En.text(key).is_empty());
             assert!(!Locale::ZhCn.text(key).is_empty());
