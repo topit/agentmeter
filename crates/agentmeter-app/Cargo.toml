@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+agentmeter-collectors = { path = "../agentmeter-collectors" }
 agentmeter-core = { path = "../agentmeter-core" }
 agentmeter-pricing = { path = "../agentmeter-pricing" }
 agentmeter-storage = { path = "../agentmeter-storage" }

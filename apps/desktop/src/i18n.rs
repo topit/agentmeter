@@ -188,6 +188,9 @@ impl Locale {
             (Self::En, MessageKey::SettingsExportError) => {
                 "AgentMeter could not write the export file."
             }
+            (Self::En, MessageKey::SourcesRescan) => "Rescan sources",
+            (Self::En, MessageKey::SourcesRescanning) => "Scanning local sources…",
+            (Self::En, MessageKey::SourcesScanError) => "AgentMeter could not scan local sources.",
             (Self::En, MessageKey::PricingReasoningRate) => "Reasoning",
             (Self::ZhCn, MessageKey::AppSubtitle) => "本地 Agent 用量",
             (Self::ZhCn, MessageKey::ShellPlaceholder) => {
@@ -349,6 +352,9 @@ impl Locale {
             (Self::ZhCn, MessageKey::SettingsExportPath) => "文件",
             (Self::ZhCn, MessageKey::SettingsExportEvents) => "事件数",
             (Self::ZhCn, MessageKey::SettingsExportError) => "AgentMeter 无法写入导出文件。",
+            (Self::ZhCn, MessageKey::SourcesRescan) => "重新扫描数据源",
+            (Self::ZhCn, MessageKey::SourcesRescanning) => "正在扫描本地数据源…",
+            (Self::ZhCn, MessageKey::SourcesScanError) => "AgentMeter 无法扫描本地数据源。",
             (Self::ZhCn, MessageKey::PricingReasoningRate) => "推理",
         }
     }
@@ -551,6 +557,9 @@ pub enum MessageKey {
     SettingsExportPath,
     SettingsExportEvents,
     SettingsExportError,
+    SourcesRescan,
+    SourcesRescanning,
+    SourcesScanError,
 }
 
 pub const fn confidence_key(confidence: DataConfidence) -> MessageKey {
@@ -879,6 +888,9 @@ mod tests {
             MessageKey::SettingsExportPath,
             MessageKey::SettingsExportEvents,
             MessageKey::SettingsExportError,
+            MessageKey::SourcesRescan,
+            MessageKey::SourcesRescanning,
+            MessageKey::SourcesScanError,
         ] {
             assert!(!Locale::En.text(key).is_empty());
             assert!(!Locale::ZhCn.text(key).is_empty());

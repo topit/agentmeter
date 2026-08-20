@@ -59,7 +59,7 @@ Every commit must include the corresponding update to this file: task status, de
 | M4-07 Sessions view | coordinator | `2a60a1f` | canonical session ledger and cost facts | pushed | source-scoped aggregation tests; stale-result tests; macOS compile; workspace checks | committed and pushed as `45af315`; CI run `32242486063` green; next is Models/Pricing |
 | M4-08 Models/Pricing views | coordinator | `45af315` | model ledger, reviewed rates, and reversible estimates | pushed | model aggregation; pricing provenance; stale-result tests; macOS compile; workspace checks | committed and pushed as `d415dbb`; deferred verification completed 2026-08-19 — full workspace gates (142 tests), CI run `32243890892` green, and reviewed Models/Pricing visual matrices |
 | M4-09 JSON/CSV export | coordinator | `d415dbb` | privacy-reviewed export payload contract | completed | payload privacy tests; exact-decimal tests; stale-result tests; workspace checks | versioned JSON and CSV exports of the canonical event ledger implemented behind explicit Settings actions; the next task reconciles this row with the actual commit and push |
-| M5-01 Ingestion orchestration | coordinator | `ddcfb2e` | collector-to-storage pipeline contracts | in progress | end-to-end ingestion tests; checkpoint resume tests; health diagnostics; workspace checks | build the IngestionService that makes the desktop app collect instead of only read; Windows deferred to long-term planning per the 2026-08-19 decision |
+| M5-01 Ingestion orchestration | coordinator | `ddcfb2e` | collector-to-storage pipeline contracts | completed | end-to-end ingestion tests; checkpoint resume tests; health diagnostics; workspace checks | IngestionService, startup collection, and the Sources rescan command implemented; the next task reconciles this row with the actual commit and push |
 
 ## Verification contract
 
@@ -328,60 +328,16 @@ Every commit must include the corresponding update to this file: task status, de
 - Tests: 147 total (137 unit tests and 10 collector-to-storage integration tests), covering payload privacy, exact decimals and UTC file-name stamps, CSV header/row shape, stale-result rejection, running/result/error state transitions, data-directory failure classification, and both-locale label coverage.
 - `cargo fmt --all --check`, `cargo check --workspace --all-targets`, `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, and `git diff --check` passed on the user's Mac with the temporary local-only `runtime_shaders` bypass, reverted before committing.
 
+## M5-01 verification evidence
+
+- `agentmeter-app` gained `IngestionService`: per-adapter discovery, source registration with stable ids (`adapter:source_key`), checkpoint-driven starts (Fresh/Resume/Rebuild with parser-version invalidation), transactional batch application, daily due-reconciliation rebuilt through the owning adapter, and adapter errors persisted as collection-failure diagnostics (Error health with RetryCollection remediation) instead of silent zeroes. Discovery-level failures stay in the returned summary because no source object exists to persist them against.
+- The default adapter set is the Codex home, Pi sessions root, and both Kimi wire roots; Amp stays out of default scanning (local history is experimental, stream-json is an explicit capture), documented in code.
+- Desktop wiring: `new()` now delegates to extracted `reload_*` helpers; startup runs one collection pass and refreshes every view snapshot afterward; the Sources route gains a real Rescan command (running indicator, localized failure banner). `IngestionUiState` rejects out-of-order scan completions.
+- End-to-end tests drive real Kimi and Codex adapters from synthetic fixtures through the service: first scan ingests exactly one event per source, repeated scans are idempotent, appended bytes resume from checkpoints, and a corrupt compressed rollout surfaces as a persisted Error health state with remediation.
+- Tests: 151 total (141 unit and 10 integration). `cargo fmt --all --check`, `cargo check --workspace --all-targets`, `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, and `git diff --check` passed on the user's Mac with the temporary local-only `runtime_shaders` bypass, reverted before committing.
+
 ## Development handoff
 
 M4-08 adds deterministic lifetime model aggregation, current pricing-snapshot provenance, bundled-dataset refresh, stale-result-safe portable presentation, localized Models/Pricing routes, and synthetic CI visual fixtures. Focused application/desktop tests passed during development, but the exact final candidate did not receive the required full workspace or macOS checks because the user explicitly requested immediate submission after their validation-tool quota was exhausted.
 
-Handoff point: the M4-09 export commit on GitHub `topit/agentmeter`, branch `main`, written directly after `bd27df3`. M4-08 was reconciled to `d415dbb` with CI run `32243890892` green. The next task begins by reconciling M4-09 with its commit and CI run; M4 is then complete and the milestone moves to M5 (macOS beta: performance/retention, signing and notarization with the user's Developer ID certificate, packaging, and the pre-packaging interactive accessibility pass).
-
-### Product and implementation state
-
-- M1 and M2 are complete. The canonical SQLite ledger, reference ingestion contracts, Amp/Codex/Pi collectors, source-health model, provider-reported costs, reconciliation reports, Codex compressed rollouts, and Pi legacy/current discovery are implemented with synthetic fixture coverage.
-- M3 is complete and exited. GPUI is pinned to Zed revision `c24358d96cdb4ce14ecbc088462295353b0103f0`; the shell, Overview, Sources, and Settings are implemented and verified on hosted Apple Silicon runners with the full locale/theme visual matrix (see the M3-06 evidence). CI reruns the Linux gates, the production-feature macOS gates, and the matrix on every push to `main`.
-- M4-01 (Kimi/Kimi Code), M4-02 (Codex Desktop), M4-04 (pricing core), M4-05 (seeded rate dataset `2026-08-19.1`), M4-06 (Activity), and M4-07 (Sessions) are complete. M4-08 (Models/Pricing) is implemented with final verification deferred. Roadmap decision 2026-08-19: DeepSeek Harness (`dsh`) joined the v1.1 backlog. The next bounded task after deferred M4-08 validation is JSON/CSV export.
-
-### Ownership map for the next task
-
-- `crates/agentmeter-pricing/src/lib.rs`: the reviewed versioned rate dataset and exact matching rules are the pricing source of truth.
-- `crates/agentmeter-storage/src/lib.rs`: pricing snapshots and event-cost projections own persisted estimate provenance; add deterministic read queries rather than querying SQLite from presentation code.
-- `crates/agentmeter-app/src/lib.rs`: follow the immutable Overview/Activity/Sessions services for presentation-safe snapshots and errors.
-- `apps/desktop/src/i18n.rs` and `gpui_app.rs`: Models and Pricing are placeholder routes; implement complete English/Chinese states with semantic theme tokens and off-render-path loading.
-
-### M3 status: exited via CI evidence
-
-M3 acceptance is complete: production-feature builds on hosted Apple Silicon runners (working Metal Toolchain) plus the reviewed 12-shot visual matrix from run `32141838068`. Every push to `main` re-runs the matrix automatically. The local Mac's missing Metal Toolchain no longer blocks any milestone work; repair it only when local interactive development (launching, keyboard-focus, and accessibility inspection) is desired, and re-verify interactively before M5 packaging.
-
-The current milestone is M4; see the ledger above and the ownership map below.
-
-### Required verification and macOS limitation
-
-Run before each completion commit:
-
-```sh
-cargo fmt --all --check
-cargo check --workspace --all-targets
-cargo test --workspace
-cargo clippy --workspace --all-targets -- -D warnings
-git diff --check
-```
-
-The M3-04 and M3-05 candidates passed all gates on the user's Apple Silicon Mac after temporarily adding `runtime_shaders` to `gpui_platform` locally; the bypass was reverted before each commit and must never be committed as a substitute for production shader compilation.
-
-Native launch and visual acceptance remain blocked on the user's Mac: the Metal Toolchain is absent (`xcrun metal --version` still fails). Repair likely requires updating macOS and restarting, then running `xcodebuild -runFirstLaunch`, `xcodebuild -downloadComponent MetalToolchain`, and `xcrun metal --version`. Treat system update/restart as user-approved work only when explicitly authorized.
-
-### Workflow constraints
-
-- Reconcile the preceding ledger row with its actual commit and CI run at the start of every task; M4-05 is reconciled to `35d1901` with CI run `32228441956` green.
-- Update this file before every commit. Update `docs/PLAN.md` in the same commit whenever scope, roadmap order, acceptance criteria, or the immediate next step changes.
-- Commit each completed step and push only to GitHub `main`. In this checkout the GitHub remote is named `github`; `origin` is the Amp-hosted read-only remote.
-- Use synthetic fixtures only. Never read or commit real agent histories, prompts, responses, tool payloads, account IDs, secrets, or real home paths.
-- Do not call a client supported until every acceptance criterion in `docs/PLAN.md` is met.
-
-## Budget ledger
-
-- Budget source: user settings, amount not provided
-- Budget total: UNKNOWN
-- Consumed: UNKNOWN
-- Integration/verification reserve: 20% policy applies, exact amount UNKNOWN
-- Threshold state: UNKNOWN
-- Cost decision: serialize schema and contract work; use one bounded documentation worker only
+Handoff point: the M5-01 ingestion orchestration commit on GitHub `topit/agentmeter`, branch `main`, written directly after `25512c8`. M4-09 was reconciled to `ddcfb2e` with CI run `32246220456` green. The next task begins by reconciling M5-01 with its commit and CI run, then continues M5: performance validation against `docs/PLAN.md` section 16 with synthetic fixture corpora, cancellable cold rebuild, retention (settle open decision 4), then signing/packaging once the user's Developer ID certificate is available.

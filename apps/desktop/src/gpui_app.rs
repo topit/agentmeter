@@ -9,16 +9,16 @@ use agentmeter_core::{
 };
 use agentmeter_desktop::{
     ActivityDimension, ActivityGranularity, ActivityLoadState, ActivityMetric, ActivityService,
-    ActivityState, ExportFormat, ExportService, ExportState, LocalDataErrorKind, Locale,
-    MessageKey, ModelCard, ModelsPricingLoadState, ModelsPricingService, ModelsPricingState,
-    OverviewLoadState, OverviewService, OverviewState, PreferencesService, RateCard, Route,
-    SessionCard, SessionsLoadState, SessionsService, SessionsState, SettingsLoadState,
-    SettingsState, ShellState, SourceCard, SourcesLoadState, SourcesService, SourcesState,
-    ThemeMode, ThemePalette, appearance_option_key, language_option_key, resolved_locale,
-    resolved_theme_mode,
+    ActivityState, ExportFormat, ExportService, ExportState, IngestionService, IngestionUiState,
+    LocalDataErrorKind, Locale, MessageKey, ModelCard, ModelsPricingLoadState,
+    ModelsPricingService, ModelsPricingState, OverviewLoadState, OverviewService, OverviewState,
+    PreferencesService, RateCard, Route, SessionCard, SessionsLoadState, SessionsService,
+    SessionsState, SettingsLoadState, SettingsState, ShellState, SourceCard, SourcesLoadState,
+    SourcesService, SourcesState, ThemeMode, ThemePalette, appearance_option_key,
+    language_option_key, resolved_locale, resolved_theme_mode,
 };
 use gpui::{
-    AnyElement, App, Bounds, Context, IntoElement, Render, Task, TitlebarOptions, Window,
+    AnyElement, App, Bounds, Context, IntoElement, Render, TitlebarOptions, Window,
     WindowAppearance, WindowBounds, WindowOptions, div, prelude::*, px, rgb, size,
 };
 
@@ -44,18 +44,13 @@ pub fn run() {
 struct NavigationShell {
     state: ShellState,
     overview: OverviewState,
-    _overview_task: Task<()>,
     activity: ActivityState,
-    _activity_task: Task<()>,
     sessions: SessionsState,
-    _sessions_task: Task<()>,
     models_pricing: ModelsPricingState,
-    _models_pricing_task: Task<()>,
     sources: SourcesState,
-    _sources_task: Task<()>,
     settings: SettingsState,
-    _settings_task: Task<()>,
     export: ExportState,
+    ingestion: IngestionUiState,
     system_locale: Locale,
 }
 
@@ -81,174 +76,22 @@ impl NavigationShell {
         })
         .detach();
 
-        let mut overview = OverviewState::default();
-        let request = overview.begin_request();
-        let load = cx.background_executor().spawn(async move {
-            let data_directory = macos_data_directory()?;
-            OverviewService::in_data_directory(data_directory)
-                .load()
-                .map_err(|error| error.kind())
-        });
-        let overview_task = cx.spawn(async move |this, cx| {
-            let result = load.await;
-            this.update(cx, |this, cx| {
-                match result {
-                    Ok(snapshot) => {
-                        this.overview.apply_snapshot(request, snapshot);
-                    }
-                    Err(error) => {
-                        this.overview.apply_error(request, error);
-                    }
-                }
-                cx.notify();
-            })
-            .ok();
-        });
-
-        let mut activity = ActivityState::default();
-        let request = activity.begin_request(ActivityGranularity::Daily, ActivityDimension::Client);
-        let load = cx.background_executor().spawn(async move {
-            let data_directory = macos_data_directory()?;
-            ActivityService::in_data_directory(data_directory)
-                .load(ActivityGranularity::Daily, ActivityDimension::Client)
-                .map_err(|error| error.kind())
-        });
-        let activity_task = cx.spawn(async move |this, cx| {
-            let result = load.await;
-            this.update(cx, |this, cx| {
-                match result {
-                    Ok(snapshot) => {
-                        this.activity.apply_snapshot(request, snapshot);
-                    }
-                    Err(error) => {
-                        this.activity.apply_error(request, error);
-                    }
-                }
-                cx.notify();
-            })
-            .ok();
-        });
-
-        let mut sessions = SessionsState::default();
-        let request = sessions.begin_request();
-        let load = cx.background_executor().spawn(async move {
-            let data_directory = macos_data_directory()?;
-            SessionsService::in_data_directory(data_directory)
-                .load()
-                .map_err(|error| error.kind())
-        });
-        let sessions_task = cx.spawn(async move |this, cx| {
-            let result = load.await;
-            this.update(cx, |this, cx| {
-                match result {
-                    Ok(snapshot) => {
-                        this.sessions.apply_snapshot(request, snapshot);
-                    }
-                    Err(error) => {
-                        this.sessions.apply_error(request, error);
-                    }
-                }
-                cx.notify();
-            })
-            .ok();
-        });
-
-        let mut models_pricing = ModelsPricingState::default();
-        let request = models_pricing.begin_request();
-        let load = cx.background_executor().spawn(async move {
-            let data_directory = macos_data_directory()?;
-            ModelsPricingService::in_data_directory(data_directory)
-                .load_or_apply_bundled(current_unix_ms())
-                .map_err(|error| error.kind())
-        });
-        let models_pricing_task = cx.spawn(async move |this, cx| {
-            let result = load.await;
-            this.update(cx, |this, cx| {
-                match result {
-                    Ok(snapshot) => {
-                        if this.models_pricing.apply_snapshot(request, snapshot) {
-                            let granularity = this.activity.granularity();
-                            let dimension = this.activity.dimension();
-                            this.reload_overview(cx);
-                            this.reload_activity(granularity, dimension, cx);
-                        }
-                    }
-                    Err(error) => {
-                        this.models_pricing.apply_error(request, error);
-                    }
-                }
-                cx.notify();
-            })
-            .ok();
-        });
-
-        let mut sources = SourcesState::default();
-        let request = sources.begin_request();
-        let load = cx.background_executor().spawn(async move {
-            let data_directory = macos_data_directory()?;
-            SourcesService::in_data_directory(data_directory)
-                .load()
-                .map_err(|error| error.kind())
-        });
-        let sources_task = cx.spawn(async move |this, cx| {
-            let result = load.await;
-            this.update(cx, |this, cx| {
-                match result {
-                    Ok(snapshot) => {
-                        this.sources.apply_snapshot(request, snapshot);
-                    }
-                    Err(error) => {
-                        this.sources.apply_error(request, error);
-                    }
-                }
-                cx.notify();
-            })
-            .ok();
-        });
-
-        let mut settings = SettingsState::default();
-        let request = settings.begin_load();
-        let load = cx.background_executor().spawn(async move {
-            let data_directory = macos_data_directory()?;
-            PreferencesService::in_data_directory(data_directory)
-                .load()
-                .map_err(|error| error.kind())
-        });
-        let settings_task = cx.spawn(async move |this, cx| {
-            let result = load.await;
-            this.update(cx, |this, cx| {
-                match result {
-                    Ok(preferences) => {
-                        if this.settings.apply_loaded(request, preferences) {
-                            this.apply_preferences_to_shell();
-                        }
-                    }
-                    Err(error) => {
-                        this.settings.apply_load_error(request, error);
-                    }
-                }
-                cx.notify();
-            })
-            .ok();
-        });
-
-        Self {
+        let mut shell = Self {
             state,
-            overview,
-            _overview_task: overview_task,
-            activity,
-            _activity_task: activity_task,
-            sessions,
-            _sessions_task: sessions_task,
-            models_pricing,
-            _models_pricing_task: models_pricing_task,
-            sources,
-            _sources_task: sources_task,
-            settings,
-            _settings_task: settings_task,
+            overview: OverviewState::default(),
+            activity: ActivityState::default(),
+            sessions: SessionsState::default(),
+            models_pricing: ModelsPricingState::default(),
+            sources: SourcesState::default(),
+            settings: SettingsState::default(),
             export: ExportState::default(),
+            ingestion: IngestionUiState::default(),
             system_locale: locale,
-        }
+        };
+        shell.reload_all_snapshots(cx);
+        shell.reload_settings(cx);
+        shell.run_ingestion(cx);
+        shell
     }
 
     fn apply_preferences_to_shell(&mut self) {
@@ -310,6 +153,153 @@ impl NavigationShell {
                     Err(error) => {
                         this.overview.apply_error(request, error);
                     }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn reload_sessions(&mut self, cx: &mut Context<Self>) {
+        let request = self.sessions.begin_request();
+        let load = cx.background_executor().spawn(async move {
+            let data_directory = macos_data_directory()?;
+            SessionsService::in_data_directory(data_directory)
+                .load()
+                .map_err(|error| error.kind())
+        });
+        cx.spawn(async move |this, cx| {
+            let result = load.await;
+            this.update(cx, |this, cx| {
+                match result {
+                    Ok(snapshot) => {
+                        this.sessions.apply_snapshot(request, snapshot);
+                    }
+                    Err(error) => {
+                        this.sessions.apply_error(request, error);
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn reload_sources(&mut self, cx: &mut Context<Self>) {
+        let request = self.sources.begin_request();
+        let load = cx.background_executor().spawn(async move {
+            let data_directory = macos_data_directory()?;
+            SourcesService::in_data_directory(data_directory)
+                .load()
+                .map_err(|error| error.kind())
+        });
+        cx.spawn(async move |this, cx| {
+            let result = load.await;
+            this.update(cx, |this, cx| {
+                match result {
+                    Ok(snapshot) => {
+                        this.sources.apply_snapshot(request, snapshot);
+                    }
+                    Err(error) => {
+                        this.sources.apply_error(request, error);
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn reload_models_pricing(&mut self, cx: &mut Context<Self>) {
+        let request = self.models_pricing.begin_request();
+        let load = cx.background_executor().spawn(async move {
+            let data_directory = macos_data_directory()?;
+            ModelsPricingService::in_data_directory(data_directory)
+                .load_or_apply_bundled(current_unix_ms())
+                .map_err(|error| error.kind())
+        });
+        cx.spawn(async move |this, cx| {
+            let result = load.await;
+            this.update(cx, |this, cx| {
+                match result {
+                    Ok(snapshot) => {
+                        if this.models_pricing.apply_snapshot(request, snapshot) {
+                            let granularity = this.activity.granularity();
+                            let dimension = this.activity.dimension();
+                            this.reload_overview(cx);
+                            this.reload_activity(granularity, dimension, cx);
+                        }
+                    }
+                    Err(error) => {
+                        this.models_pricing.apply_error(request, error);
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn reload_settings(&mut self, cx: &mut Context<Self>) {
+        let request = self.settings.begin_load();
+        let load = cx.background_executor().spawn(async move {
+            let data_directory = macos_data_directory()?;
+            PreferencesService::in_data_directory(data_directory)
+                .load()
+                .map_err(|error| error.kind())
+        });
+        cx.spawn(async move |this, cx| {
+            let result = load.await;
+            this.update(cx, |this, cx| {
+                match result {
+                    Ok(preferences) => {
+                        if this.settings.apply_loaded(request, preferences) {
+                            this.apply_preferences_to_shell();
+                        }
+                    }
+                    Err(error) => {
+                        this.settings.apply_load_error(request, error);
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Refreshes every view snapshot after the ledger changed. Called once
+    /// at startup and after each ingestion run.
+    fn reload_all_snapshots(&mut self, cx: &mut Context<Self>) {
+        let granularity = self.activity.granularity();
+        let dimension = self.activity.dimension();
+        self.reload_overview(cx);
+        self.reload_activity(granularity, dimension, cx);
+        self.reload_sessions(cx);
+        self.reload_models_pricing(cx);
+        self.reload_sources(cx);
+    }
+
+    /// Runs one collection pass through the enabled local adapters on the
+    /// background executor, then refreshes every view snapshot. Single-use
+    /// generations reject overlapping runs.
+    fn run_ingestion(&mut self, cx: &mut Context<Self>) {
+        let request = self.ingestion.begin_scan();
+        let scan = cx.background_executor().spawn(async move {
+            let data_directory = macos_data_directory()?;
+            IngestionService::with_default_local_adapters(data_directory)
+                .scan_and_ingest(current_unix_ms())
+                .map_err(|error| error.kind())
+        });
+        cx.spawn(async move |this, cx| {
+            let result = scan.await;
+            this.update(cx, |this, cx| {
+                if this.ingestion.apply_scan_result(request, result) {
+                    this.reload_all_snapshots(cx);
                 }
                 cx.notify();
             })
@@ -1085,7 +1075,7 @@ impl NavigationShell {
         }
     }
 
-    fn sources_content(&self, palette: ThemePalette) -> AnyElement {
+    fn sources_content(&self, palette: ThemePalette, cx: &mut Context<Self>) -> AnyElement {
         let locale = self.state.locale();
         match self.sources.load_state() {
             SourcesLoadState::Loading => div()
@@ -1146,15 +1136,43 @@ impl NavigationShell {
                     .sources
                     .snapshot()
                     .expect("populated sources state must contain a snapshot");
-                div()
+                let mut content = div()
                     .mt_6()
                     .flex()
                     .flex_col()
                     .gap_4()
+                    .child(div().flex().flex_row().items_center().gap_3().child(
+                        if self.ingestion.running() {
+                            div()
+                                .text_sm()
+                                .text_color(rgb(palette.muted_text))
+                                .child(locale.text(MessageKey::SourcesRescanning))
+                                .into_any_element()
+                        } else {
+                            option_control(
+                                "sources-rescan",
+                                locale.text(MessageKey::SourcesRescan),
+                                false,
+                                palette,
+                                move |this, _, _, cx| {
+                                    this.run_ingestion(cx);
+                                },
+                                cx,
+                            )
+                        },
+                    ))
                     .children(snapshot.sources.iter().map(|health| {
                         source_card(SourceCard::from_health(health, locale), locale, palette)
-                    }))
-                    .into_any_element()
+                    }));
+                if self.ingestion.error().is_some() {
+                    content = content.child(
+                        div()
+                            .text_sm()
+                            .text_color(rgb(palette.danger))
+                            .child(locale.text(MessageKey::SourcesScanError)),
+                    );
+                }
+                content.into_any_element()
             }
         }
     }
@@ -1590,7 +1608,7 @@ impl Render for NavigationShell {
                 } else if selected == Route::Pricing {
                     self.pricing_content(palette)
                 } else if selected == Route::Sources {
-                    self.sources_content(palette)
+                    self.sources_content(palette, cx)
                 } else if selected == Route::Settings {
                     self.settings_content(palette, cx)
                 } else {

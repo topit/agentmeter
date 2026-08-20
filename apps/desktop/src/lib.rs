@@ -1,6 +1,7 @@
 mod activity;
 mod export;
 mod i18n;
+mod ingestion;
 mod models_pricing;
 mod overview;
 mod sessions;
@@ -12,16 +13,18 @@ mod theme;
 pub use activity::{ActivityLoadState, ActivityMetric, ActivityRequest, ActivityState};
 pub use agentmeter_app::{
     ActivityDimension, ActivityGranularity, ActivityPoint, ActivityService, ActivitySnapshot,
-    ExportFormat, ExportService, ExportSummary, LocalDataErrorKind, LocalDataServiceError,
-    ModelRateSummary, ModelUsageSummary, ModelsPricingService, ModelsPricingSnapshot,
-    OverviewService, PreferencesService, PricingApplicationSummary, SessionSummary,
-    SessionsService, SessionsSnapshot, SourcesService,
+    AdapterRunSummary, ExportFormat, ExportService, ExportSummary, IngestionService,
+    IngestionSummary, LocalDataErrorKind, LocalDataServiceError, ModelRateSummary,
+    ModelUsageSummary, ModelsPricingService, ModelsPricingSnapshot, OverviewService,
+    PreferencesService, PricingApplicationSummary, SessionSummary, SessionsService,
+    SessionsSnapshot, SourcesService,
 };
 pub use export::{ExportRequest, ExportState};
 pub use i18n::{
     Locale, MessageKey, appearance_option_key, confidence_key, health_state_key,
     language_option_key, permission_key, remediation_key,
 };
+pub use ingestion::{IngestionRequest, IngestionUiState};
 pub use models_pricing::{
     ModelCard, ModelsPricingLoadState, ModelsPricingRequest, ModelsPricingState, RateCard,
 };

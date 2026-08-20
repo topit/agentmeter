@@ -5,11 +5,18 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use agentmeter_collectors::{
+    CollectorAdapter, IngestBatch, IngestMode, IngestStart, SourceCandidate, SourceCheckpoint,
+    SourceKind, codex::CodexJsonlAdapter, kimi::KimiWireAdapter, pi::PiJsonlAdapter,
+};
 use agentmeter_core::{
     AppPreferences, NanoUsd, OverviewSnapshot, SourceHealthSnapshot, TokenBreakdown,
 };
 use agentmeter_pricing::{ModelRates, RateDataset};
-use agentmeter_storage::{Database, EstimateFact, StorageError};
+use agentmeter_storage::{
+    CheckpointStatus, CollectionFailureKind, Database, EstimateFact, IngestRequest, StorageError,
+    WriteMode,
+};
 
 /// Why a local data service could not produce a snapshot. The kinds are
 /// presentation-safe: they never embed paths or raw database errors.
@@ -716,6 +723,268 @@ pub struct RepriceSummary {
     pub dataset: String,
 }
 
+/// Orchestrates local collection: discovery, registration, checkpointed
+/// ingestion, due full reconciliation, and visible failure diagnostics.
+/// This is the write path that feeds every read service; vendor files are
+/// only ever read.
+pub struct IngestionService {
+    data_directory: PathBuf,
+    adapters: Vec<LocalAdapter>,
+}
+
+struct LocalAdapter {
+    root: PathBuf,
+    adapter: Box<dyn CollectorAdapter>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct IngestionSummary {
+    pub runs: Vec<AdapterRunSummary>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AdapterRunSummary {
+    pub adapter_id: String,
+    pub discovered_sources: u64,
+    pub ingested_sources: u64,
+    pub failed_sources: u64,
+    pub reconciled_sources: u64,
+    /// Discovery-level failure; without discovered sources there is no
+    /// registered object to persist it against, so it stays in the summary.
+    pub discovery_error: Option<String>,
+}
+
+/// The default scan interval for periodic full reconciliation.
+pub const RECONCILIATION_INTERVAL_MS: u64 = 86_400_000;
+
+impl IngestionService {
+    pub fn with_adapters(
+        data_directory: impl AsRef<Path>,
+        adapters: Vec<(PathBuf, Box<dyn CollectorAdapter>)>,
+    ) -> Self {
+        Self {
+            data_directory: data_directory.as_ref().to_owned(),
+            adapters: adapters
+                .into_iter()
+                .map(|(root, adapter)| LocalAdapter { root, adapter })
+                .collect(),
+        }
+    }
+
+    /// The enabled local adapters for 1.0: the Codex home, Pi sessions, and
+    /// Kimi wire roots. Amp's local-history parsing stays experimental and
+    /// opt-in, and stream-json capture is an explicit user action, so
+    /// neither runs by default.
+    pub fn with_default_local_adapters(data_directory: impl AsRef<Path>) -> Self {
+        let mut adapters: Vec<(PathBuf, Box<dyn CollectorAdapter>)> = Vec::new();
+        if let Some(home) = CodexJsonlAdapter::default_codex_home() {
+            let adapter = CodexJsonlAdapter::new(home.clone());
+            adapters.push((home, Box::new(adapter)));
+        }
+        if let Some(root) = PiJsonlAdapter::default_sessions_root() {
+            let adapter = PiJsonlAdapter::new(root.clone());
+            adapters.push((root, Box::new(adapter)));
+        }
+        for root in KimiWireAdapter::default_roots() {
+            let adapter = KimiWireAdapter::new(root.clone());
+            adapters.push((root, Box::new(adapter)));
+        }
+        Self::with_adapters(data_directory, adapters)
+    }
+
+    pub fn scan_and_ingest(
+        &self,
+        observed_at_unix_ms: i64,
+    ) -> Result<IngestionSummary, LocalDataServiceError> {
+        let mut database = open_local_database(&local_database_path(&self.data_directory))?;
+        let mut runs = Vec::new();
+        let mut candidates: BTreeMap<String, (usize, SourceCandidate)> = BTreeMap::new();
+
+        for (index, local) in self.adapters.iter().enumerate() {
+            let mut run = AdapterRunSummary {
+                adapter_id: local.adapter.id().to_owned(),
+                discovered_sources: 0,
+                ingested_sources: 0,
+                failed_sources: 0,
+                reconciled_sources: 0,
+                discovery_error: None,
+            };
+            let discovered = match local.adapter.discover() {
+                Ok(discovered) => discovered,
+                Err(error) => {
+                    run.discovery_error = Some(error.message);
+                    runs.push(run);
+                    continue;
+                }
+            };
+            run.discovered_sources = discovered.len() as u64;
+            for candidate in discovered {
+                let source_object_id = format!("{}:{}", local.adapter.id(), candidate.source_key);
+                candidates.insert(source_object_id.clone(), (index, candidate.clone()));
+                if let Err(error) =
+                    database.register_source(&registration(local, &candidate, &source_object_id))
+                {
+                    let _ = database.record_collection_failure(
+                        &source_object_id,
+                        observed_at_unix_ms,
+                        CollectionFailureKind::Collection,
+                        &error.to_string(),
+                    );
+                    run.failed_sources += 1;
+                    continue;
+                }
+                let start = match database
+                    .checkpoint_status(&source_object_id, local.adapter.parser_version())
+                {
+                    Ok(CheckpointStatus::NeverIngested) => IngestStart::Fresh,
+                    Ok(CheckpointStatus::Current(checkpoint)) => {
+                        IngestStart::Resume(&SourceCheckpoint {
+                            byte_offset: checkpoint.byte_offset,
+                            source_len: checkpoint.source_len,
+                            prefix_fingerprint: checkpoint.prefix_fingerprint,
+                            parser_state: checkpoint.parser_state,
+                        })
+                    }
+                    Ok(CheckpointStatus::Invalidated { .. }) => IngestStart::Rebuild,
+                    Err(error) => {
+                        let _ = database.record_collection_failure(
+                            &source_object_id,
+                            observed_at_unix_ms,
+                            CollectionFailureKind::Collection,
+                            &error.to_string(),
+                        );
+                        run.failed_sources += 1;
+                        continue;
+                    }
+                };
+                if apply_batch(
+                    &mut database,
+                    local,
+                    &candidate,
+                    &source_object_id,
+                    start,
+                    observed_at_unix_ms,
+                ) {
+                    run.ingested_sources += 1;
+                } else {
+                    run.failed_sources += 1;
+                }
+            }
+            runs.push(run);
+        }
+
+        // Periodic full reconciliation: due sources rebuild through the
+        // adapter that still owns them.
+        if let Ok(due) =
+            database.sources_due_for_reconciliation(observed_at_unix_ms, RECONCILIATION_INTERVAL_MS)
+        {
+            for target in due {
+                let Some((index, candidate)) = candidates.get(&target.source_object_id) else {
+                    continue;
+                };
+                let local = &self.adapters[*index];
+                if apply_batch(
+                    &mut database,
+                    local,
+                    candidate,
+                    &target.source_object_id,
+                    IngestStart::Rebuild,
+                    observed_at_unix_ms,
+                ) && let Some(run) = runs
+                    .iter_mut()
+                    .find(|run| run.adapter_id == target.adapter_id)
+                {
+                    run.reconciled_sources += 1;
+                }
+            }
+        }
+
+        Ok(IngestionSummary { runs })
+    }
+}
+
+fn registration(
+    local: &LocalAdapter,
+    candidate: &SourceCandidate,
+    source_object_id: &str,
+) -> agentmeter_storage::SourceRegistration {
+    agentmeter_storage::SourceRegistration {
+        installation_id: format!("{}:{}", local.adapter.id(), local.root.to_string_lossy()),
+        source_object_id: source_object_id.to_owned(),
+        adapter_id: local.adapter.id().to_owned(),
+        platform: std::env::consts::OS.to_owned(),
+        root_path: local.root.to_string_lossy().into_owned(),
+        discovery_method: "scan".to_owned(),
+        native_path: candidate.path.to_string_lossy().into_owned(),
+        kind: source_kind_string(candidate.kind).to_owned(),
+    }
+}
+
+fn source_kind_string(kind: SourceKind) -> &'static str {
+    match kind {
+        SourceKind::AppendOnlyJsonl => "append_only_jsonl",
+        SourceKind::MutableJson => "mutable_json",
+        SourceKind::Sqlite => "sqlite",
+        SourceKind::Api => "api",
+    }
+}
+
+/// Runs one adapter batch into the ledger transactionally; adapter errors
+/// become persisted collection-failure diagnostics instead of silent zeroes.
+fn apply_batch(
+    database: &mut Database,
+    local: &LocalAdapter,
+    candidate: &SourceCandidate,
+    source_object_id: &str,
+    start: IngestStart<'_>,
+    observed_at_unix_ms: i64,
+) -> bool {
+    match local.adapter.ingest(candidate, start) {
+        Ok(batch) => {
+            let request = ingest_request(
+                source_object_id,
+                local.adapter.parser_version(),
+                batch,
+                observed_at_unix_ms,
+            );
+            database.apply_ingest(request).is_ok()
+        }
+        Err(error) => {
+            let _ = database.record_collection_failure(
+                source_object_id,
+                observed_at_unix_ms,
+                CollectionFailureKind::Collection,
+                &error.message,
+            );
+            false
+        }
+    }
+}
+
+fn ingest_request(
+    source_object_id: &str,
+    parser_version: u32,
+    batch: IngestBatch,
+    observed_at_unix_ms: i64,
+) -> IngestRequest {
+    IngestRequest {
+        source_object_id: source_object_id.to_owned(),
+        parser_version,
+        mode: match batch.mode {
+            IngestMode::Append => WriteMode::Append,
+            IngestMode::Replace => WriteMode::Replace,
+        },
+        source_fingerprint: batch.source_fingerprint,
+        source_len: batch.checkpoint.source_len,
+        byte_offset: batch.checkpoint.byte_offset,
+        prefix_fingerprint: batch.checkpoint.prefix_fingerprint,
+        parser_state: batch.checkpoint.parser_state,
+        observed_at_unix_ms,
+        records: batch.records,
+        warnings: batch.warnings,
+    }
+}
+
 /// Writes a privacy-reviewed export of the canonical event ledger to the
 /// local exports directory. Payloads contain normalized usage facts only —
 /// never source paths, warnings, provenance text, or message content — and
@@ -990,9 +1259,10 @@ mod tests {
 
     use super::{
         ActivityDimension, ActivityGranularity, ActivityService, ExportFormat, ExportService,
-        LocalDataErrorKind, ModelsPricingService, OverviewService, PreferencesService,
-        PricingService, SessionsService, SourcesService,
+        IngestionService, LocalDataErrorKind, ModelsPricingService, OverviewService,
+        PreferencesService, PricingService, SessionsService, SourcesService,
     };
+    use agentmeter_collectors::{codex::CodexJsonlAdapter, kimi::KimiWireAdapter};
     use agentmeter_pricing::RateDataset;
 
     #[test]
@@ -1563,6 +1833,159 @@ mod tests {
         );
         assert!(!csv.contains("/fixture"));
         assert!(!csv.contains("diagnostic text"));
+    }
+
+    #[test]
+    fn collects_from_real_adapters_end_to_end() {
+        let data_directory = tempdir().unwrap();
+        let kimi_root = tempdir().unwrap();
+        let kimi_session = kimi_root
+            .path()
+            .join("sessions")
+            .join("wd_project_ab12cd34ef56")
+            .join("session_1a2b3c4d-0506-0708-090a-0b0c0d0e0f10")
+            .join("agents")
+            .join("main");
+        std::fs::create_dir_all(&kimi_session).unwrap();
+        let kimi_wire = kimi_session.join("wire.jsonl");
+        std::fs::write(
+            &kimi_wire,
+            concat!(
+                r#"{"type":"metadata","protocol_version":"1.5"}"#,
+                '\n',
+                r#"{"type":"llm.request","kind":"loop","provider":"moonshot","model":"kimi-for-coding","time":1782113170000}"#,
+                '\n',
+                r#"{"type":"usage.record","model":"kimi-code/kimi-for-coding","usage":{"inputOther":3064,"output":76,"inputCacheRead":14848,"inputCacheCreation":0},"usageScope":"turn","time":1782113184943}"#,
+                '\n',
+            ),
+        )
+        .unwrap();
+        let codex_home = tempdir().unwrap();
+        let codex_sessions = codex_home.path().join("sessions");
+        std::fs::create_dir_all(&codex_sessions).unwrap();
+        std::fs::write(
+            codex_sessions.join("rollout-synthetic.jsonl"),
+            concat!(
+                r#"{"timestamp":"2024-01-01T00:00:00Z","ordinal":0,"type":"session_meta","payload":{"id":"thread-synthetic","source":"cli","model_provider":"openai"}}"#,
+                '\n',
+                r#"{"timestamp":"2024-01-01T00:00:01Z","ordinal":1,"type":"turn_context","payload":{"model":"gpt-5.3-codex"}}"#,
+                '\n',
+                r#"{"timestamp":"2024-01-01T00:00:02Z","ordinal":2,"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"output_tokens":20,"total_tokens":120}}}}"#,
+                '\n',
+            ),
+        )
+        .unwrap();
+
+        let service = IngestionService::with_adapters(
+            data_directory.path(),
+            vec![
+                (
+                    kimi_root.path().to_owned(),
+                    Box::new(KimiWireAdapter::new(kimi_root.path())),
+                ),
+                (
+                    codex_home.path().to_owned(),
+                    Box::new(CodexJsonlAdapter::new(codex_home.path())),
+                ),
+            ],
+        );
+        let summary = service.scan_and_ingest(1_787_011_200_000).unwrap();
+
+        assert_eq!(summary.runs.len(), 2);
+        let kimi_run = summary
+            .runs
+            .iter()
+            .find(|run| run.adapter_id == "kimi-wire")
+            .unwrap();
+        assert_eq!(kimi_run.discovered_sources, 1);
+        assert_eq!(kimi_run.ingested_sources, 1);
+        assert_eq!(kimi_run.failed_sources, 0);
+        let codex_run = summary
+            .runs
+            .iter()
+            .find(|run| run.adapter_id == "codex-cli-jsonl")
+            .unwrap();
+        assert_eq!(codex_run.ingested_sources, 1);
+
+        let database =
+            Database::open(data_directory.path().join("AgentMeter/agentmeter.db")).unwrap();
+        let overview = database.overview_snapshot().unwrap();
+        assert_eq!(
+            overview.event_count, 2,
+            "one Kimi delta and one Codex delta"
+        );
+        let health = database.source_health_snapshot().unwrap();
+        assert_eq!(health.sources.len(), 2);
+        assert!(
+            health
+                .sources
+                .iter()
+                .all(|source| source.last_success_unix_ms.is_some())
+        );
+
+        // A repeated scan is idempotent and appends only new bytes.
+        let repeated = service.scan_and_ingest(1_787_011_300_000).unwrap();
+        assert!(repeated.runs.iter().all(|run| run.failed_sources == 0));
+        let database =
+            Database::open(data_directory.path().join("AgentMeter/agentmeter.db")).unwrap();
+        assert_eq!(
+            database.overview_snapshot().unwrap().event_count,
+            2,
+            "unchanged sources must not double count"
+        );
+
+        std::fs::write(
+            &kimi_wire,
+            std::fs::read_to_string(&kimi_wire)
+                .unwrap()
+                + r#"{"type":"usage.record","model":"kimi-code/kimi-for-coding","usage":{"inputOther":10,"output":2,"inputCacheRead":0,"inputCacheCreation":0},"usageScope":"turn","time":1782113284943}"#
+                + "\n",
+        )
+        .unwrap();
+        service.scan_and_ingest(1_787_011_400_000).unwrap();
+        let database =
+            Database::open(data_directory.path().join("AgentMeter/agentmeter.db")).unwrap();
+        assert_eq!(
+            database.overview_snapshot().unwrap().event_count,
+            3,
+            "appended Kimi usage resumes from the checkpoint"
+        );
+    }
+
+    #[test]
+    fn records_adapter_failures_as_health_diagnostics() {
+        let data_directory = tempdir().unwrap();
+        let codex_home = tempdir().unwrap();
+        let codex_sessions = codex_home.path().join("sessions");
+        std::fs::create_dir_all(&codex_sessions).unwrap();
+        std::fs::write(codex_sessions.join("rollout-corrupt.jsonl.zst"), "not-zstd").unwrap();
+
+        let service = IngestionService::with_adapters(
+            data_directory.path(),
+            vec![(
+                codex_home.path().to_owned(),
+                Box::new(CodexJsonlAdapter::new(codex_home.path())),
+            )],
+        );
+        let summary = service.scan_and_ingest(1_787_011_200_000).unwrap();
+
+        assert_eq!(summary.runs[0].discovered_sources, 1);
+        assert_eq!(summary.runs[0].failed_sources, 1);
+        assert_eq!(summary.runs[0].ingested_sources, 0);
+
+        let database =
+            Database::open(data_directory.path().join("AgentMeter/agentmeter.db")).unwrap();
+        let health = database.source_health_snapshot().unwrap();
+        assert_eq!(health.sources.len(), 1);
+        assert_eq!(
+            health.sources[0].state,
+            agentmeter_core::SourceHealthState::Error
+        );
+        assert!(health.sources[0].error.is_some());
+        assert_eq!(
+            health.sources[0].remediation,
+            Some(agentmeter_core::SourceRemediation::RetryCollection)
+        );
     }
 
     #[test]
