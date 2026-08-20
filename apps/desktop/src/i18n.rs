@@ -193,6 +193,10 @@ impl Locale {
             (Self::En, MessageKey::SourcesScanError) => "AgentMeter could not scan local sources.",
             (Self::En, MessageKey::SourcesCancelScan) => "Cancel scan",
             (Self::En, MessageKey::SourcesScanCancelled) => "Scan cancelled.",
+            (Self::En, MessageKey::OverviewCollecting) => "Collecting local usage…",
+            (Self::En, MessageKey::OverviewCollectingBody) => {
+                "AgentMeter is reading your local agent history for the first time. On large histories this can take a few minutes; progress is shown on the Sources page."
+            }
             (Self::En, MessageKey::SettingsData) => "Data and privacy",
             (Self::En, MessageKey::SettingsDataBody) => {
                 "Usage history is stored locally and kept even after agent files are deleted, until you remove AgentMeter's data yourself. Nothing leaves this machine except the files you export above."
@@ -363,6 +367,10 @@ impl Locale {
             (Self::ZhCn, MessageKey::SourcesScanError) => "AgentMeter 无法扫描本地数据源。",
             (Self::ZhCn, MessageKey::SourcesCancelScan) => "取消扫描",
             (Self::ZhCn, MessageKey::SourcesScanCancelled) => "扫描已取消。",
+            (Self::ZhCn, MessageKey::OverviewCollecting) => "正在收集本地用量…",
+            (Self::ZhCn, MessageKey::OverviewCollectingBody) => {
+                "AgentMeter 正在首次读取本地 Agent 历史。历史较多时可能需要几分钟，进度显示在“数据源”页面。"
+            }
             (Self::ZhCn, MessageKey::SettingsData) => "数据与隐私",
             (Self::ZhCn, MessageKey::SettingsDataBody) => {
                 "用量历史保存在本地，即使 Agent 的文件被删除也会保留，直到你自行删除 AgentMeter 的数据。除你在上方导出的文件外，不会有任何数据离开这台设备。"
@@ -576,6 +584,8 @@ pub enum MessageKey {
     SourcesScanCancelled,
     SettingsData,
     SettingsDataBody,
+    OverviewCollecting,
+    OverviewCollectingBody,
 }
 
 pub const fn confidence_key(confidence: DataConfidence) -> MessageKey {
@@ -911,6 +921,8 @@ mod tests {
             MessageKey::SourcesScanCancelled,
             MessageKey::SettingsData,
             MessageKey::SettingsDataBody,
+            MessageKey::OverviewCollecting,
+            MessageKey::OverviewCollectingBody,
         ] {
             assert!(!Locale::En.text(key).is_empty());
             assert!(!Locale::ZhCn.text(key).is_empty());

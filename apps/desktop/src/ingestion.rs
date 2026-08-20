@@ -1,4 +1,6 @@
-use agentmeter_app::{IngestionSummary, LocalDataErrorKind};
+use std::sync::Arc;
+
+use agentmeter_app::{IngestionSummary, LocalDataErrorKind, ScanProgress};
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct IngestionRequest(u64);
@@ -6,17 +8,18 @@ pub struct IngestionRequest(u64);
 /// Presentation state for collection runs. Scans execute through the
 /// application service off the render path; out-of-order completions are
 /// rejected so an older scan can never mark a newer one finished.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default)]
 pub struct IngestionUiState {
     latest_request: u64,
     running: bool,
     cancelled: bool,
+    progress: Arc<ScanProgress>,
     last_summary: Option<IngestionSummary>,
     error: Option<LocalDataErrorKind>,
 }
 
 impl IngestionUiState {
-    pub fn begin_scan(&mut self) -> IngestionRequest {
+    pub fn begin_scan(&mut self) -> (IngestionRequest, Arc<ScanProgress>) {
         self.latest_request = self
             .latest_request
             .checked_add(1)
@@ -24,7 +27,9 @@ impl IngestionUiState {
         self.running = true;
         self.cancelled = false;
         self.error = None;
-        IngestionRequest(self.latest_request)
+        let progress = ScanProgress::shared();
+        self.progress = progress.clone();
+        (IngestionRequest(self.latest_request), progress)
     }
 
     pub fn apply_scan_result(
@@ -53,6 +58,11 @@ impl IngestionUiState {
 
     pub const fn cancelled(&self) -> bool {
         self.cancelled
+    }
+
+    /// Live (processed, discovered) counts for the running scan.
+    pub fn progress(&self) -> (u64, u64) {
+        (self.progress.processed(), self.progress.discovered())
     }
 
     pub const fn error(&self) -> Option<LocalDataErrorKind> {
@@ -87,8 +97,8 @@ mod tests {
     #[test]
     fn rejects_an_out_of_order_scan_result() {
         let mut state = IngestionUiState::default();
-        let stale = state.begin_scan();
-        let current = state.begin_scan();
+        let (stale, _) = state.begin_scan();
+        let (current, _) = state.begin_scan();
 
         assert!(!state.apply_scan_result(stale, Ok(summary())));
         assert!(state.apply_scan_result(current, Err(LocalDataErrorKind::Database)));
@@ -101,11 +111,11 @@ mod tests {
     fn records_the_latest_summary_and_clears_stale_errors() {
         let mut state = IngestionUiState::default();
 
-        let failed = state.begin_scan();
+        let (failed, _) = state.begin_scan();
         assert!(state.running());
         assert!(state.apply_scan_result(failed, Err(LocalDataErrorKind::Database)));
 
-        let succeeded = state.begin_scan();
+        let (succeeded, _) = state.begin_scan();
         assert_eq!(state.error(), None, "a new scan clears the stale error");
         assert!(state.apply_scan_result(succeeded, Ok(summary())));
 

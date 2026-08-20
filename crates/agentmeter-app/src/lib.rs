@@ -777,6 +777,39 @@ impl CancellationToken {
     }
 }
 
+/// Live progress of a collection pass, shared with the UI. `processed`
+/// counts sources whose work started this run; `discovered` accumulates
+/// across adapters as discovery proceeds.
+#[derive(Debug, Default)]
+pub struct ScanProgress {
+    discovered: std::sync::atomic::AtomicU64,
+    processed: std::sync::atomic::AtomicU64,
+}
+
+impl ScanProgress {
+    pub fn shared() -> std::sync::Arc<Self> {
+        std::sync::Arc::new(Self::default())
+    }
+
+    pub fn discovered(&self) -> u64 {
+        self.discovered.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn processed(&self) -> u64 {
+        self.processed.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn note_discovered(&self, count: u64) {
+        self.discovered
+            .fetch_add(count, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn note_processed(&self) {
+        self.processed
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 /// The default scan interval for periodic full reconciliation.
 pub const RECONCILIATION_INTERVAL_MS: u64 = 86_400_000;
 
@@ -819,24 +852,32 @@ impl IngestionService {
         &self,
         observed_at_unix_ms: i64,
     ) -> Result<IngestionSummary, LocalDataServiceError> {
-        self.scan_and_ingest_cancellable(observed_at_unix_ms, &CancellationToken::new())
+        self.scan_with(
+            observed_at_unix_ms,
+            &CancellationToken::new(),
+            &ScanProgress::default(),
+            || false,
+        )
     }
 
     /// Runs the collection pass, checking `token` between source-owned
     /// transactions. A cancelled scan returns the partial summary with
-    /// `cancelled` set instead of an error.
-    pub fn scan_and_ingest_cancellable(
+    /// `cancelled` set instead of an error. `progress` receives live
+    /// discovered/processed counts for the UI.
+    pub fn scan_and_ingest_reported(
         &self,
         observed_at_unix_ms: i64,
         token: &CancellationToken,
+        progress: &ScanProgress,
     ) -> Result<IngestionSummary, LocalDataServiceError> {
-        self.scan_with(observed_at_unix_ms, token, || false)
+        self.scan_with(observed_at_unix_ms, token, progress, || false)
     }
 
     fn scan_with(
         &self,
         observed_at_unix_ms: i64,
         token: &CancellationToken,
+        progress: &ScanProgress,
         mut extra_cancel_check: impl FnMut() -> bool,
     ) -> Result<IngestionSummary, LocalDataServiceError> {
         let is_cancelled = |extra: &mut dyn FnMut() -> bool| token.is_cancelled() || extra();
@@ -867,6 +908,7 @@ impl IngestionService {
                 }
             };
             run.discovered_sources = discovered.len() as u64;
+            progress.note_discovered(discovered.len() as u64);
             for candidate in discovered {
                 if is_cancelled(&mut extra_cancel_check) {
                     cancelled = true;
@@ -875,6 +917,7 @@ impl IngestionService {
                 }
                 let source_object_id = format!("{}:{}", local.adapter.id(), candidate.source_key);
                 candidates.insert(source_object_id.clone(), (index, candidate.clone()));
+                progress.note_processed();
                 if let Err(error) =
                     database.register_source(&registration(local, &candidate, &source_object_id))
                 {
@@ -1320,7 +1363,7 @@ mod tests {
     use super::{
         ActivityDimension, ActivityGranularity, ActivityService, CancellationToken, ExportFormat,
         ExportService, IngestionService, LocalDataErrorKind, ModelsPricingService, OverviewService,
-        PreferencesService, PricingService, SessionsService, SourcesService,
+        PreferencesService, PricingService, ScanProgress, SessionsService, SourcesService,
     };
     use agentmeter_collectors::{codex::CodexJsonlAdapter, kimi::KimiWireAdapter};
     use agentmeter_pricing::RateDataset;
@@ -2038,14 +2081,22 @@ mod tests {
         // Cancel at the third cancellation check: the adapter check and the
         // first source pass, the second source never starts.
         let mut checks = 0_u32;
+        let progress = ScanProgress::default();
         let partial = service
-            .scan_with(1_787_011_200_000, &CancellationToken::new(), || {
-                checks += 1;
-                checks >= 3
-            })
+            .scan_with(
+                1_787_011_200_000,
+                &CancellationToken::new(),
+                &progress,
+                || {
+                    checks += 1;
+                    checks >= 3
+                },
+            )
             .unwrap();
 
         assert!(partial.cancelled);
+        assert_eq!(progress.discovered(), 2);
+        assert_eq!(progress.processed(), 1, "only the first source started");
         assert_eq!(partial.runs[0].discovered_sources, 2);
         assert_eq!(partial.runs[0].ingested_sources, 1);
         let database_path = data_directory.path().join("AgentMeter/agentmeter.db");
@@ -2093,13 +2144,15 @@ mod tests {
         );
         let token = CancellationToken::new();
         token.cancel();
+        let progress = ScanProgress::default();
 
         let summary = service
-            .scan_and_ingest_cancellable(1_787_011_200_000, &token)
+            .scan_and_ingest_reported(1_787_011_200_000, &token, &progress)
             .unwrap();
 
         assert!(summary.cancelled);
         assert!(summary.runs.is_empty());
+        assert_eq!(progress.processed(), 0);
         assert_eq!(
             Database::open(data_directory.path().join("AgentMeter/agentmeter.db"))
                 .unwrap()

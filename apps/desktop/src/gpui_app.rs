@@ -293,13 +293,32 @@ impl NavigationShell {
         self.ingestion_token.cancel();
         let token = CancellationToken::new();
         self.ingestion_token = token.clone();
-        let request = self.ingestion.begin_scan();
+        let (request, progress) = self.ingestion.begin_scan();
         let scan = cx.background_executor().spawn(async move {
             let data_directory = macos_data_directory()?;
             IngestionService::with_default_local_adapters(data_directory)
-                .scan_and_ingest_cancellable(current_unix_ms(), &token)
+                .scan_and_ingest_reported(current_unix_ms(), &token, &progress)
                 .map_err(|error| error.kind())
         });
+        // Poll the shared progress counters so long first scans stay visibly
+        // alive instead of reading as an empty application.
+        cx.spawn(async move |this, cx| {
+            while this
+                .update(cx, |this, cx| {
+                    let running = this.ingestion.running();
+                    if running {
+                        cx.notify();
+                    }
+                    running
+                })
+                .unwrap_or(false)
+            {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(400))
+                    .await;
+            }
+        })
+        .detach();
         cx.spawn(async move |this, cx| {
             let result = scan.await;
             this.update(cx, |this, cx| {
@@ -410,6 +429,28 @@ impl NavigationShell {
                 .mt_3()
                 .text_color(rgb(palette.muted_text))
                 .child(locale.text(MessageKey::OverviewLoading))
+                .into_any_element(),
+            OverviewLoadState::Empty if self.ingestion.running() => div()
+                .mt_6()
+                .max_w(px(560.0))
+                .p_6()
+                .rounded_lg()
+                .border_1()
+                .border_color(rgb(palette.accent))
+                .bg(rgb(palette.surface))
+                .child(
+                    div()
+                        .text_lg()
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .child(locale.text(MessageKey::OverviewCollecting)),
+                )
+                .child(
+                    div()
+                        .mt_2()
+                        .text_sm()
+                        .text_color(rgb(palette.muted_text))
+                        .child(locale.text(MessageKey::OverviewCollectingBody)),
+                )
                 .into_any_element(),
             OverviewLoadState::Empty => div()
                 .mt_6()
@@ -1159,10 +1200,20 @@ impl NavigationShell {
                             .items_center()
                             .gap_3()
                             .child(if self.ingestion.running() {
+                                let (processed, discovered) = self.ingestion.progress();
                                 div()
                                     .text_sm()
                                     .text_color(rgb(palette.muted_text))
                                     .child(locale.text(MessageKey::SourcesRescanning))
+                                    .child(
+                                        div().text_sm().text_color(rgb(palette.muted_text)).child(
+                                            format!(
+                                                "{} / {}",
+                                                locale.format_count(processed),
+                                                locale.format_count(discovered)
+                                            ),
+                                        ),
+                                    )
                                     .into_any_element()
                             } else {
                                 option_control(
